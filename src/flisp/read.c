@@ -11,6 +11,7 @@ enum {
 // exceptions are '.', which is an ordinary symbol character
 // unless it's the only character in the symbol, and '#', which is
 // an ordinary symbol character unless it's the first character.
+/* 判断字符是否为普通符号字符（非特殊分隔符） */
 static inline int symchar(char c)
 {
     static const char *special = "()[]'\";`,\\| \f\n\r\t\v";
@@ -18,6 +19,7 @@ static inline int symchar(char c)
 }
 
 // like strtoull, but accepts "0b" prefix for base 2 and "0o" prefix for base 8
+/* strtoull的扩展版本，支持"0b"（二进制）和"0o"（八进制）前缀 */
 static unsigned long long strtoull_0b0o(const char *nptr, char **endptr, int base)
 {
     if (*nptr == '0') {
@@ -29,6 +31,7 @@ static unsigned long long strtoull_0b0o(const char *nptr, char **endptr, int bas
     return strtoull(nptr, endptr, base);
 }
 
+/* 判断token是否为数字字面量（指定进制），成功时可选返回解析后的值 */
 int isnumtok_base(fl_context_t *fl_ctx, char *tok, value_t *pval, int base)
 {
     char *end;
@@ -105,11 +108,13 @@ int isnumtok_base(fl_context_t *fl_ctx, char *tok, value_t *pval, int base)
     return done;
 }
 
+/* 判断token是否为数字（自动检测进制），封装isnumtok_base */
 static int isnumtok(fl_context_t *fl_ctx, char *tok, value_t *pval)
 {
     return isnumtok_base(fl_ctx, tok, pval, 0);
 }
 
+/* 读取并解析数字token，溢出时报解析错误 */
 static int read_numtok(fl_context_t *fl_ctx, char *tok, value_t *pval, int base)
 {
     int result;
@@ -120,6 +125,9 @@ static int read_numtok(fl_context_t *fl_ctx, char *tok, value_t *pval, int base)
     return result;
 }
 
+/* === Token读取辅助函数 === */
+
+/* 获取下一个有效字符（跳过空白和注释） */
 static char nextchar(fl_context_t *fl_ctx)
 {
     int ch;
@@ -149,11 +157,13 @@ static char nextchar(fl_context_t *fl_ctx)
     return c;
 }
 
+/* 消费当前token，将token类型重置为NONE */
 static void take(fl_context_t *fl_ctx)
 {
     fl_ctx->readtoktype = TOK_NONE;
 }
 
+/* 向读取缓冲区追加字符，缓冲区满时报错 */
 static void accumchar(fl_context_t *fl_ctx, char c, int *pi)
 {
     fl_ctx->readbuf[(*pi)++] = c;
@@ -162,6 +172,7 @@ static void accumchar(fl_context_t *fl_ctx, char c, int *pi)
 }
 
 // return: 1 if escaped (forced to be symbol)
+/* 读取一个token（符号或数字），支持|...|转义和反斜杠转义 */
 static int read_token(fl_context_t *fl_ctx, char c, int digits)
 {
     int i=0, ch, escaped=0, issym=0, nc=0;
@@ -204,6 +215,7 @@ static int read_token(fl_context_t *fl_ctx, char c, int digits)
 
 static value_t do_read_sexpr(fl_context_t *fl_ctx, value_t label);
 
+/* 预读下一个token（词法分析核心），返回token类型 */
 static uint32_t peek(fl_context_t *fl_ctx)
 {
     char c, *end;
@@ -409,6 +421,7 @@ static uint32_t peek(fl_context_t *fl_ctx)
 
 // NOTE: this is NOT an efficient operation. it is only used by the
 // reader, and requires at least 1 and up to 3 garbage collections!
+/* 扩展向量容量（低效操作），通过GC重写旧向量的引用 */
 static value_t vector_grow(fl_context_t *fl_ctx, value_t v, int rewrite_refs)
 {
     size_t i, s = vector_size(v);
@@ -428,6 +441,7 @@ static value_t vector_grow(fl_context_t *fl_ctx, value_t v, int rewrite_refs)
     return POP(fl_ctx);
 }
 
+/* 读取向量：[elem1 elem2 ...] 或 #(elem1 elem2 ...) */
 static value_t read_vector(fl_context_t *fl_ctx, value_t label, uint32_t closer)
 {
     value_t v=fl_ctx->the_empty_vector, elt;
@@ -455,6 +469,7 @@ static value_t read_vector(fl_context_t *fl_ctx, value_t label, uint32_t closer)
     return POP(fl_ctx);
 }
 
+/* 读取字符串字面量（"..."），支持转义序列 */
 static value_t read_string(fl_context_t *fl_ctx)
 {
     char *buf, *temp;
@@ -548,6 +563,7 @@ static value_t read_string(fl_context_t *fl_ctx)
 // build a list of conses. this is complicated by the fact that all conses
 // can move whenever a new cons is allocated. we have to refer to every cons
 // through a handle to a relocatable pointer (i.e. a pointer on the stack).
+/* 读取列表：(elem1 elem2 ...)，支持点号(.)语法 */
 static void read_list(fl_context_t *fl_ctx, value_t *pval, value_t label)
 {
     value_t c, *pc;
@@ -589,6 +605,7 @@ static void read_list(fl_context_t *fl_ctx, value_t *pval, value_t label)
 }
 
 // label is the backreference we'd like to fix up with this read
+/* 读取一个完整的S表达式（递归核心），label用于后向引用绑定 */
 static value_t do_read_sexpr(fl_context_t *fl_ctx, value_t label)
 {
     value_t v, sym, oldtokval, *head;
@@ -709,6 +726,9 @@ static value_t do_read_sexpr(fl_context_t *fl_ctx, value_t label)
     return FL_UNSPECIFIED(fl_ctx);
 }
 
+/* === 公共读取接口 === */
+
+/* 从输入流中读取一个S表达式（公共入口） */
 value_t fl_read_sexpr(fl_context_t *fl_ctx, value_t f)
 {
     value_t v;
@@ -729,6 +749,7 @@ value_t fl_read_sexpr(fl_context_t *fl_ctx, value_t f)
     return v;
 }
 
+/* 初始化读取子系统 */
 static void fl_read_init(fl_context_t *fl_ctx)
 {
     fl_ctx->readtoktype = TOK_NONE;

@@ -8,6 +8,7 @@
 extern "C" {
 #endif
 
+/* 将命令行参数转换为 Lisp 列表 */
 static value_t argv_list(fl_context_t *fl_ctx, int argc, char *argv[])
 {
     int i;
@@ -26,6 +27,7 @@ extern value_t fl_file(fl_context_t *fl_ctx, value_t *args, uint32_t nargs);
 
 static fl_context_t fl_global_ctx;
 
+/* flisp 入口函数：初始化、加载引导映像、执行 __start */
 int main(int argc, char *argv[])
 {
     char fname_buf[1024];

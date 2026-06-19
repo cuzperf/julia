@@ -11,12 +11,14 @@
 extern "C" {
 #endif
 
+/* 打印 iostream 对象（输出 #<io stream>） */
 void print_iostream(fl_context_t *fl_ctx, value_t v, ios_t *f)
 {
     (void)v;
     fl_print_str(fl_ctx, "#<io stream>", f);
 }
 
+/* 释放 iostream：关闭底层 I/O 流 */
 void free_iostream(fl_context_t *fl_ctx, value_t self)
 {
     (void)fl_ctx;
@@ -24,6 +26,7 @@ void free_iostream(fl_context_t *fl_ctx, value_t self)
     ios_close(s);
 }
 
+/* GC 时重新定位 iostream：修正缓冲区指针至新位置 */
 void relocate_iostream(fl_context_t *fl_ctx, value_t oldv, value_t newv)
 {
     (void)fl_ctx;
@@ -37,17 +40,20 @@ void relocate_iostream(fl_context_t *fl_ctx, value_t oldv, value_t newv)
 const cvtable_t iostream_vtable = { print_iostream, relocate_iostream,
                                     free_iostream, NULL };
 
+/* 判断值是否为 iostream 类型 */
 int fl_isiostream(fl_context_t *fl_ctx, value_t v)
 {
     return iscvalue(v) && cv_class((cvalue_t*)ptr(v)) == fl_ctx->iostreamtype;
 }
 
+/* 内置函数 iostream?：判断参数是否为 iostream */
 value_t fl_iostreamp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "iostream?", nargs, 1);
     return fl_isiostream(fl_ctx, args[0]) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* 内置函数 eof-object：返回 EOF 哨兵对象 */
 value_t fl_eof_object(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     (void)args;
@@ -55,12 +61,14 @@ value_t fl_eof_object(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->FL_EOF;
 }
 
+/* 内置函数 eof-object?：判断参数是否为 EOF 对象 */
 value_t fl_eof_objectp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "eof-object?", nargs, 1);
     return (fl_ctx->FL_EOF == args[0]) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* 安全类型转换：提取 ios_t 指针（非 iostream 时抛出类型错误） */
 static ios_t *toiostream(fl_context_t *fl_ctx, value_t v, const char *fname)
 {
     if (!fl_isiostream(fl_ctx, v))
@@ -68,11 +76,13 @@ static ios_t *toiostream(fl_context_t *fl_ctx, value_t v, const char *fname)
     return value2c(ios_t*, v);
 }
 
+/* toiostream 的对外公开版本 */
 ios_t *fl_toiostream(fl_context_t *fl_ctx, value_t v, const char *fname)
 {
     return toiostream(fl_ctx, v, fname);
 }
 
+/* 打开文件流：支持 :read/:write/:create/:append/:truncate 标志 */
 value_t fl_file(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 1)
@@ -95,6 +105,7 @@ value_t fl_file(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return f;
 }
 
+/* 创建内存缓冲区流 */
 value_t fl_buffer(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "buffer", nargs, 0);
@@ -106,6 +117,7 @@ value_t fl_buffer(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return f;
 }
 
+/* 从输入流读取一个 S 表达式 */
 value_t fl_read(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     value_t arg = 0;
@@ -127,6 +139,7 @@ value_t fl_read(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return v;
 }
 
+/* io.getc：从流中读取一个 UTF-8 字符 */
 value_t fl_iogetc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.getc", nargs, 1);
@@ -141,6 +154,7 @@ value_t fl_iogetc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return mk_wchar(fl_ctx, wc);
 }
 
+/* io.peekc：预读一个 UTF-8 字符（不消耗输入） */
 value_t fl_iopeekc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.peekc", nargs, 1);
@@ -154,6 +168,7 @@ value_t fl_iopeekc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return mk_wchar(fl_ctx, wc);
 }
 
+/* io.putc：向输出流写入一个 Unicode 字符 */
 value_t fl_ioputc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.putc", nargs, 2);
@@ -164,6 +179,7 @@ value_t fl_ioputc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fixnum(ios_pututf8(s, wc));
 }
 
+/* io.flush：刷新输出流的缓冲区 */
 value_t fl_ioflush(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.flush", nargs, 1);
@@ -173,6 +189,7 @@ value_t fl_ioflush(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->T;
 }
 
+/* io.close：关闭 I/O 流 */
 value_t fl_ioclose(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.close", nargs, 1);
@@ -181,6 +198,7 @@ value_t fl_ioclose(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->T;
 }
 
+/* io.discardbuffer：丢弃流中未读的缓冲数据 */
 value_t fl_iopurge(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.discardbuffer", nargs, 1);
@@ -189,6 +207,7 @@ value_t fl_iopurge(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->T;
 }
 
+/* io.eof?：检查流是否已到达文件末尾 */
 value_t fl_ioeof(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.eof?", nargs, 1);
@@ -196,6 +215,7 @@ value_t fl_ioeof(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return (ios_eof(s) ? fl_ctx->T : fl_ctx->F);
 }
 
+/* input-port-line：获取流的当前行号 */
 value_t fl_iolineno(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "input-port-line", nargs, 1);
@@ -203,6 +223,7 @@ value_t fl_iolineno(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, s->lineno);
 }
 
+/* io.set-lineno!：设置流的当前行号 */
 value_t fl_iosetlineno(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.set-lineno!", nargs, 2);
@@ -212,6 +233,7 @@ value_t fl_iosetlineno(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return args[1];
 }
 
+/* input-port-column：获取流的当前列号 */
 value_t fl_iocolno(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "input-port-column", nargs, 1);
@@ -219,6 +241,7 @@ value_t fl_iocolno(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, s->u_colno);
 }
 
+/* io.seek：定位流到指定位置 */
 value_t fl_ioseek(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.seek", nargs, 2);
@@ -230,6 +253,7 @@ value_t fl_ioseek(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->T;
 }
 
+/* io.skip：跳过流中指定数量的字节 */
 value_t fl_ioskip(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.skip", nargs, 2);
@@ -241,6 +265,7 @@ value_t fl_ioskip(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->T;
 }
 
+/* io.pos：返回流的当前位置 */
 value_t fl_iopos(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.pos", nargs, 1);
@@ -251,6 +276,7 @@ value_t fl_iopos(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, (size_t)res);
 }
 
+/* write：将值打印到输出流（默认 *output-stream*） */
 value_t fl_write(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 1 || nargs > 2)
@@ -264,6 +290,7 @@ value_t fl_write(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return args[0];
 }
 
+/* io.read：从流中读取指定类型的二进制数据 */
 value_t fl_ioread(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs != 3)
@@ -293,6 +320,7 @@ value_t fl_ioread(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return cv;
 }
 
+/* 解析 io.write 的可选参数：数据偏移量和写入长度 */
 // args must contain data[, offset[, count]]
 static void get_start_count_args(fl_context_t *fl_ctx, value_t *args, uint32_t nargs, size_t sz,
                                  size_t *offs, size_t *nb, char *fname)
@@ -308,6 +336,7 @@ static void get_start_count_args(fl_context_t *fl_ctx, value_t *args, uint32_t n
     }
 }
 
+/* io.write：向输出流写入二进制数据或字符 */
 value_t fl_iowrite(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 2 || nargs > 4)
@@ -331,6 +360,7 @@ value_t fl_iowrite(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, ios_write(s, data, nb));
 }
 
+/* 解析 io.readuntil/io.copyuntil 的分隔符参数 */
 static char get_delim_arg(fl_context_t *fl_ctx, value_t arg, char *fname)
 {
     size_t uldelim = tosize(fl_ctx, arg, fname);
@@ -343,6 +373,7 @@ static char get_delim_arg(fl_context_t *fl_ctx, value_t arg, char *fname)
     return (char)uldelim;
 }
 
+/* io.readuntil：从流中读取直到（并包含）指定分隔符为止 */
 value_t fl_ioreaduntil(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.readuntil", nargs, 2);
@@ -370,6 +401,7 @@ value_t fl_ioreaduntil(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return str;
 }
 
+/* io.copyuntil：从源流复制到目标流直到遇到指定分隔符 */
 value_t fl_iocopyuntil(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.copyuntil", nargs, 3);
@@ -379,6 +411,7 @@ value_t fl_iocopyuntil(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, ios_copyuntil(dest, src, delim, 1));
 }
 
+/* io.copy：在流之间复制数据（可选复制固定字节数） */
 value_t fl_iocopy(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 2 || nargs > 3)
@@ -392,6 +425,7 @@ value_t fl_iocopy(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, ios_copyall(dest, src));
 }
 
+/* 将内存流的内容提取为字符串（偷取或复制缓冲区） */
 value_t stream_to_string(fl_context_t *fl_ctx, value_t *ps)
 {
     value_t str;
@@ -413,6 +447,7 @@ value_t stream_to_string(fl_context_t *fl_ctx, value_t *ps)
     return str;
 }
 
+/* io.tostring!：将内存流的内容转换为字符串并清空流 */
 value_t fl_iotostring(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "io.tostring!", nargs, 1);
@@ -453,6 +488,7 @@ static const builtinspec_t iostreamfunc_info[] = {
     { NULL, NULL }
 };
 
+/* 初始化 I/O 流系统：注册内置函数、定义 iostream 类型、设置标准流 */
 void iostream_init(fl_context_t *fl_ctx)
 {
     fl_ctx->iostreamsym = symbol(fl_ctx, "iostream");

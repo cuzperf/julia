@@ -83,11 +83,25 @@ static const short builtin_arg_counts[] =
       ANYARGS, -1, ANYARGS, -1, 2,  2, 2, 2,
       ANYARGS, 2, 3 };
 
-#define PUSH(fl_ctx, v) (fl_ctx->Stack[fl_ctx->SP++] = (v))
-#define POP(fl_ctx)   (fl_ctx->Stack[--fl_ctx->SP])
-#define POPN(fl_ctx, n) (fl_ctx->SP-=(n))
+#define PUSH(fl_ctx, v)                                         \
+    do {                                                        \
+        (fl_ctx->Stack[fl_ctx->SP++] = (v));                    \
+        fl_print(fl_ctx, ios_stderr, v);                        \
+        ios_printf(ios_stderr, "\nSP = %d\n\n", fl_ctx->SP);    \
+    } while(0)
+
+#define POP(fl_ctx) (fl_print(fl_ctx, ios_stderr, fl_ctx->Stack[fl_ctx->SP - 1]), ios_printf(ios_stderr, "\nSP = %d\n\n", fl_ctx->SP), fl_ctx->Stack[--fl_ctx->SP])
+
+#define POPN(fl_ctx, n)                                                 \
+    for (int i = 1; i <= n; ++i) {                                      \
+        fl_print(fl_ctx, ios_stderr, fl_ctx->Stack[fl_ctx->SP - i]);    \
+        ios_printf(ios_stderr, "\n");                                   \
+    }                                                                   \
+    ios_printf(ios_stderr, "\nSP = %d\n\n", fl_ctx->SP);                \
+    (fl_ctx->SP-=(n))
 
 static value_t apply_cl(fl_context_t *fl_ctx, uint32_t nargs);
+/* 分配 n 个 word 的原始存储（前向声明） */
 static value_t *alloc_words(fl_context_t *fl_ctx, int n);
 static value_t relocate(fl_context_t *fl_ctx, value_t v);
 
@@ -98,13 +112,14 @@ typedef struct _fl_readstate_t {
     struct _fl_readstate_t *prev;
 } fl_readstate_t;
 
+/* 释放读取状态（包含反向引用表和 gensym 表） */
 static void free_readstate(fl_readstate_t *rs)
 {
     htable_free(&rs->backrefs);
     htable_free(&rs->gensyms);
 }
 
-// error utilities ------------------------------------------------------------
+/* 错误处理工具 ------------------------------------------------------------ */
 
 #define FL_TRY(fl_ctx)                           \
   fl_exception_context_t _ctx; int l__tr, l__ca; \
@@ -118,6 +133,7 @@ static void free_readstate(fl_readstate_t *rs)
         for(l__ca=1; l__ca; l__ca=0,                                    \
                 fl_ctx->lasterror=fl_ctx->NIL,fl_ctx->throwing_frame=0,fl_ctx->SP=_ctx.sp,fl_ctx->curr_frame=_ctx.frame)
 
+/* 保存当前异常上下文（栈指针、框架、读取状态等） */
 void fl_savestate(fl_context_t *fl_ctx, fl_exception_context_t *_ctx)
 {
     _ctx->sp = fl_ctx->SP;
@@ -127,6 +143,7 @@ void fl_savestate(fl_context_t *fl_ctx, fl_exception_context_t *_ctx)
     _ctx->ngchnd = fl_ctx->N_GCHND;
 }
 
+/* 从异常上下文恢复状态（清除错误、恢复栈和框架） */
 void fl_restorestate(fl_context_t *fl_ctx, fl_exception_context_t *_ctx)
 {
     fl_ctx->lasterror = fl_ctx->NIL;
@@ -135,6 +152,7 @@ void fl_restorestate(fl_context_t *fl_ctx, fl_exception_context_t *_ctx)
     fl_ctx->curr_frame = _ctx->frame;
 }
 
+/* 抛出异常：设置 lasterror，回退读取状态，通过 longjmp 跳转 */
 void fl_raise(fl_context_t *fl_ctx, value_t e)
 {
     fl_ctx->lasterror = e;
@@ -152,6 +170,7 @@ void fl_raise(fl_context_t *fl_ctx, value_t e)
     fl_longjmp(thisctx->buf, 1);
 }
 
+/* 构造错误消息字符串 */
 static value_t make_error_msg(fl_context_t *fl_ctx, const char *format, va_list args)
 {
     char msgbuf[512];
@@ -159,6 +178,7 @@ static value_t make_error_msg(fl_context_t *fl_ctx, const char *format, va_list 
     return string_from_cstrn(fl_ctx, msgbuf, len);
 }
 
+/* 带格式字符串的错误报告（使用可变参数） */
 void lerrorf(fl_context_t *fl_ctx, value_t e, const char *format, ...)
 {
     va_list args;
@@ -171,6 +191,7 @@ void lerrorf(fl_context_t *fl_ctx, value_t e, const char *format, ...)
     fl_raise(fl_ctx, fl_list2(fl_ctx, e, msg));
 }
 
+/* 简单错误报告 */
 void lerror(fl_context_t *fl_ctx, value_t e, const char *msg)
 {
     PUSH(fl_ctx, e);
@@ -179,17 +200,19 @@ void lerror(fl_context_t *fl_ctx, value_t e, const char *msg)
     fl_raise(fl_ctx, fl_list2(fl_ctx, e, m));
 }
 
+/* 类型错误：期望类型与实际不符 */
 void type_error(fl_context_t *fl_ctx, const char *fname, const char *expected, value_t got)
 {
     fl_raise(fl_ctx, fl_listn(fl_ctx, 4, fl_ctx->TypeError, symbol(fl_ctx, fname), symbol(fl_ctx, expected), got));
 }
 
+/* 越界错误：数组索引超出范围 */
 void bounds_error(fl_context_t *fl_ctx, const char *fname, value_t arr, value_t ind)
 {
     fl_raise(fl_ctx, fl_listn(fl_ctx, 4, fl_ctx->BoundsError, symbol(fl_ctx, fname), arr, ind));
 }
 
-// safe cast operators --------------------------------------------------------
+/* 安全类型转换操作符 ---------------------------------------------------- */
 
 #define isstring(v) fl_isstring(fl_ctx, v)
 #define SAFECAST_OP(type,ctype,cnvt)                                    \
@@ -205,8 +228,9 @@ SAFECAST_OP(fixnum,fixnum_t, numval)
 SAFECAST_OP(string,char*,    cvalue_data)
 #undef isstring
 
-// symbol table ---------------------------------------------------------------
+/* 符号表 --------------------------------------------------------------- */
 
+/* 判断字符串是否为关键字（以 : 开头或结尾） */
 int fl_is_keyword_name(const char *str, size_t len)
 {
     return len>1 && ((str[0] == ':' || str[len-1] == ':') && str[1] != '\0');
@@ -214,6 +238,7 @@ int fl_is_keyword_name(const char *str, size_t len)
 
 #define CHECK_ALIGN8(p) assert((((uintptr_t)(p))&0x7)==0 && "flisp requires malloc to return 8-aligned pointers")
 
+/* 创建一个新的符号对象 */
 static symbol_t *mk_symbol(const char *str)
 {
     symbol_t *sym;
@@ -239,6 +264,7 @@ static symbol_t *mk_symbol(const char *str)
     return sym;
 }
 
+/* 在符号二叉树中查找字符串，返回指向该节点的指针位置 */
 static symbol_t **symtab_lookup(symbol_t **ptree, const char *str)
 {
     int x;
@@ -255,6 +281,7 @@ static symbol_t **symtab_lookup(symbol_t **ptree, const char *str)
     return ptree;
 }
 
+/* 通过字符串查找或创建符号，返回 TAG_SYM 标记的值 */
 value_t symbol(fl_context_t *fl_ctx, const char *str)
 {
     symbol_t **pnode = symtab_lookup(&fl_ctx->symtab, str);
@@ -263,6 +290,7 @@ value_t symbol(fl_context_t *fl_ctx, const char *str)
     return tagptr(*pnode, TAG_SYM);
 }
 
+/* 创建 gensym（唯一生成的符号），计数器递增 */
 value_t fl_gensym(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
 #ifdef MEMDEBUG2
@@ -282,17 +310,20 @@ value_t fl_gensym(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 #endif
 }
 
+/* 判断值是否为 gensym */
 int fl_isgensym(fl_context_t *fl_ctx, value_t v)
 {
     return isgensym(fl_ctx, v);
 }
 
+/* 内置函数 gensym?：判断参数是否为 gensym */
 static value_t fl_gensymp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "gensym?", nargs, 1);
     return isgensym(fl_ctx, args[0]) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* 获取符号的名称字符串（gensym 则动态生成 "g<id>"） */
 char *symbol_name(fl_context_t *fl_ctx, value_t v)
 {
 #ifndef MEMDEBUG2
@@ -309,14 +340,16 @@ char *symbol_name(fl_context_t *fl_ctx, value_t v)
     return ((symbol_t*)ptr(v))->name;
 }
 
-// conses ---------------------------------------------------------------------
+/* cons 单元 ------------------------------------------------------------- */
 
 #ifdef MEMDEBUG2
 #define GC_INTERVAL 100000
 #endif
 
+/* 垃圾收集器声明 */
 void gc(fl_context_t *fl_ctx, int mustgrow);
 
+/* 分配一个 cons 单元（触发 GC 如果空间不足） */
 static value_t mk_cons(fl_context_t *fl_ctx)
 {
     cons_t *c;
@@ -339,6 +372,7 @@ static value_t mk_cons(fl_context_t *fl_ctx)
     return tagptr(c, TAG_CONS);
 }
 
+/* 分配 n 个 word 大小的原始存储（自动对齐到偶数个 word） */
 static value_t *alloc_words(fl_context_t *fl_ctx, int n)
 {
     value_t *first;
@@ -367,7 +401,7 @@ static value_t *alloc_words(fl_context_t *fl_ctx, int n)
     return first;
 }
 
-// allocate n consecutive conses
+/* 分配 n 个连续的 cons 单元 */
 #ifndef MEMDEBUG2
 #define cons_reserve(fl_ctx, n) tagptr(alloc_words(fl_ctx, (n)*2), TAG_CONS)
 #endif
@@ -386,6 +420,7 @@ static value_t *alloc_words(fl_context_t *fl_ctx, int n)
 #define unmark_cons(fl_ctx, c) bitvector_set(fl_ctx->consflags, cons_index(fl_ctx, c), 0)
 #endif
 
+/* 分配一个长度为 n 的向量，可选择初始化所有元素为 UNSPECIFIED */
 value_t alloc_vector(fl_context_t *fl_ctx, size_t n, int init)
 {
     if (n == 0) return fl_ctx->the_empty_vector;
@@ -400,20 +435,21 @@ value_t alloc_vector(fl_context_t *fl_ctx, size_t n, int init)
     return v;
 }
 
-// cvalues --------------------------------------------------------------------
+/* C 值系统（C 数据类型和 FFI 支持） ---------------------------------------- */
 
 #include "cvalues.c"
 #include "types.c"
 
-// print ----------------------------------------------------------------------
+/* 打印输出 ---------------------------------------------------------------- */
 
 static int isnumtok(fl_context_t *fl_ctx, char *tok, value_t *pval);
 static inline int symchar(char c);
 
 #include "print.c"
 
-// collector ------------------------------------------------------------------
+/* 垃圾收集器 -------------------------------------------------------------- */
 
+/* 注册 GC 句柄：将指针压入 GC 句柄栈，确保 GC 期间该值被追踪 */
 void fl_gc_handle(fl_context_t *fl_ctx, value_t *pv)
 {
     if (fl_ctx->N_GCHND >= FL_N_GC_HANDLES)
@@ -421,17 +457,20 @@ void fl_gc_handle(fl_context_t *fl_ctx, value_t *pv)
     fl_ctx->GCHandleStack[fl_ctx->N_GCHND++] = pv;
 }
 
+/* 释放 n 个 GC 句柄（从栈顶弹出句柄指针） */
 void fl_free_gc_handles(fl_context_t *fl_ctx, uint32_t n)
 {
     assert(fl_ctx->N_GCHND >= n);
     fl_ctx->N_GCHND -= n;
 }
 
+/* 外部可用的 relocate 包装函数 */
 value_t relocate_lispvalue(fl_context_t *fl_ctx, value_t v)
 {
     return relocate(fl_ctx, v);
 }
 
+/* 遍历符号树并 relocate 所有全局绑定值 */
 static void trace_globals(fl_context_t *fl_ctx, symbol_t *root)
 {
     while (root != NULL) {
@@ -442,6 +481,7 @@ static void trace_globals(fl_context_t *fl_ctx, symbol_t *root)
     }
 }
 
+/* 将值 v 从 fromspace 复制（relocate）到 tospace，返回新位置 */
 static value_t relocate(fl_context_t *fl_ctx, value_t v)
 {
     value_t a, d, nc, first, *pcdr;
@@ -544,6 +584,7 @@ static value_t relocate(fl_context_t *fl_ctx, value_t v)
     return v;
 }
 
+/* GC 主函数：复制存活对象到 tospace，交换 fromspace/tospace，必要时增长堆 */
 void gc(fl_context_t *fl_ctx, int mustgrow)
 {
     void *temp;
@@ -649,6 +690,7 @@ void gc(fl_context_t *fl_ctx, int mustgrow)
 #endif
 }
 
+/* 栈增长：将评估栈扩大 1.5 倍 */
 static void grow_stack(fl_context_t *fl_ctx)
 {
     size_t newsz = fl_ctx->N_STACK + (fl_ctx->N_STACK>>1);
@@ -659,9 +701,9 @@ static void grow_stack(fl_context_t *fl_ctx)
     fl_ctx->N_STACK = newsz;
 }
 
-// utils ----------------------------------------------------------------------
+/* 工具函数 ---------------------------------------------------------------- */
 
-// apply function with n args on the stack
+/* 对栈上的 n 个参数应用函数（内部函数） */
 static value_t _applyn(fl_context_t *fl_ctx, uint32_t n)
 {
     value_t f = fl_ctx->Stack[fl_ctx->SP-n-1];
@@ -685,6 +727,7 @@ static value_t _applyn(fl_context_t *fl_ctx, uint32_t n)
     return v;
 }
 
+/* 将函数 f 应用于参数列表 l（将列表元素压栈后调用） */
 value_t fl_apply(fl_context_t *fl_ctx, value_t f, value_t l)
 {
     value_t v = l;
@@ -703,6 +746,7 @@ value_t fl_apply(fl_context_t *fl_ctx, value_t f, value_t l)
     return v;
 }
 
+/* 使用可变参数调用 n 元函数 f */
 value_t fl_applyn(fl_context_t *fl_ctx, uint32_t n, value_t f, ...)
 {
     va_list ap;
@@ -722,6 +766,7 @@ value_t fl_applyn(fl_context_t *fl_ctx, uint32_t n, value_t f, ...)
     return v;
 }
 
+/* 使用可变参数创建 n 个元素的列表 */
 value_t fl_listn(fl_context_t *fl_ctx, size_t n, ...)
 {
     va_list ap;
@@ -759,6 +804,7 @@ value_t fl_listn(fl_context_t *fl_ctx, size_t n, ...)
 #endif
 }
 
+/* 创建两个元素的列表 (a . (b . nil)) */
 value_t fl_list2(fl_context_t *fl_ctx, value_t a, value_t b)
 {
     PUSH(fl_ctx, a);
@@ -780,6 +826,7 @@ value_t fl_list2(fl_context_t *fl_ctx, value_t a, value_t b)
 #endif
 }
 
+/* 创建一个 cons 单元 (a . b) */
 value_t fl_cons(fl_context_t *fl_ctx, value_t a, value_t b)
 {
     PUSH(fl_ctx, a);
@@ -790,6 +837,7 @@ value_t fl_cons(fl_context_t *fl_ctx, value_t a, value_t b)
     return c;
 }
 
+/* 判断值是否为数字（fixnum 或非 wchar 的 cprim） */
 int fl_isnumber(fl_context_t *fl_ctx, value_t v)
 {
     if (isfixnum(v)) return 1;
@@ -800,18 +848,19 @@ int fl_isnumber(fl_context_t *fl_ctx, value_t v)
     return 0;
 }
 
-// read -----------------------------------------------------------------------
+/* 读取器（解析器）----------------------------------------------------------- */
 
 #include "read.c"
 
-// equal ----------------------------------------------------------------------
+/* 相等性比较 ---------------------------------------------------------------- */
 
 #include "equal.c"
 
-// eval -----------------------------------------------------------------------
+/* 求值器 ------------------------------------------------------------------- */
 
 #define list(fl_ctx, a,n) _list(fl_ctx, (a), (n), 0)
 
+/* 创建列表（star 为真时最后一个参数作为点对列表的尾部） */
 static value_t _list(fl_context_t *fl_ctx, value_t *args, uint32_t nargs, int star)
 {
     cons_t *c;
@@ -856,6 +905,7 @@ static value_t _list(fl_context_t *fl_ctx, value_t *args, uint32_t nargs, int st
     return v;
 }
 
+/* 复制列表 L（浅复制） */
 static value_t copy_list(fl_context_t *fl_ctx, value_t L)
 {
     if (!iscons(L))
@@ -883,6 +933,7 @@ static value_t copy_list(fl_context_t *fl_ctx, value_t L)
     return c;
 }
 
+/* try-catch 实现：执行 thunk，若异常则调用处理函数 */
 static value_t do_trycatch(fl_context_t *fl_ctx)
 {
     uint32_t saveSP = fl_ctx->SP;
@@ -908,6 +959,7 @@ static value_t do_trycatch(fl_context_t *fl_ctx)
   argument layout on stack is
   |--required args--|--opt args--|--kw args--|--rest args...
 */
+/* 处理关键字参数：匹配关键字表，分配默认值，处理剩余参数 */
 static uint32_t process_keys(fl_context_t *fl_ctx, value_t kwtable,
                              uint32_t nreq, uint32_t nkw, uint32_t nopt,
                              uint32_t bp, uint32_t nargs, int va)
@@ -1018,6 +1070,7 @@ static uint32_t process_keys(fl_context_t *fl_ctx, value_t kwtable,
   - allocate vararg array
   - push closed env, set up new environment
 */
+/* 闭包应用核心：字节码解释器的主循环（使用 computed goto 或 switch） */
 JL_EXTENSION static value_t apply_cl(fl_context_t *fl_ctx, uint32_t nargs)
 {
     VM_LABELS;
@@ -1852,6 +1905,7 @@ JL_EXTENSION static value_t apply_cl(fl_context_t *fl_ctx, uint32_t nargs)
 #endif
 }
 
+/* 分析字节码指令流，计算所需的最大栈深度 */
 static uint32_t compute_maxstack(uint8_t *code, size_t len, int bswap)
 {
     uint8_t *ip = code+4, *end = code+len;
@@ -2022,6 +2076,7 @@ static uint32_t compute_maxstack(uint8_t *code, size_t len, int bswap)
     return maxsp+4;
 }
 
+/* 生成栈回溯：从指定框架指针 top 开始收集调用栈各帧的参数 */
 // top = top frame pointer to start at
 static value_t _stacktrace(fl_context_t *fl_ctx, uint32_t top)
 {
@@ -2040,8 +2095,9 @@ static value_t _stacktrace(fl_context_t *fl_ctx, uint32_t top)
     return lst;
 }
 
-// builtins -------------------------------------------------------------------
+/* 内置函数 ---------------------------------------------------------------- */
 
+/* 将 builtinspec_t 数组中描述的内置函数注册到全局符号表 */
 void assign_global_builtins(fl_context_t *fl_ctx, const builtinspec_t *b)
 {
     while (b->name != NULL) {
@@ -2050,6 +2106,7 @@ void assign_global_builtins(fl_context_t *fl_ctx, const builtinspec_t *b)
     }
 }
 
+/* 创建函数闭包：从字节码和值向量构造 function 对象 */
 static value_t fl_function(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs == 1 && issymbol(args[0]))
@@ -2103,6 +2160,7 @@ static value_t fl_function(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fv;
 }
 
+/* 获取函数的字节码对象 */
 static value_t fl_function_code(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "function:code", nargs, 1);
@@ -2110,6 +2168,7 @@ static value_t fl_function_code(fl_context_t *fl_ctx, value_t *args, uint32_t na
     if (!isclosure(v)) type_error(fl_ctx, "function:code", "function", v);
     return fn_bcode(v);
 }
+/* 获取函数的值向量（包含自由变量和常量） */
 static value_t fl_function_vals(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "function:vals", nargs, 1);
@@ -2117,6 +2176,8 @@ static value_t fl_function_vals(fl_context_t *fl_ctx, value_t *args, uint32_t na
     if (!isclosure(v)) type_error(fl_ctx, "function:vals", "function", v);
     return fn_vals(v);
 }
+
+/* 获取函数的环境（闭包捕获的变量） */
 static value_t fl_function_env(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "function:env", nargs, 1);
@@ -2124,6 +2185,7 @@ static value_t fl_function_env(fl_context_t *fl_ctx, value_t *args, uint32_t nar
     if (!isclosure(v)) type_error(fl_ctx, "function:env", "function", v);
     return fn_env(v);
 }
+/* 获取函数的名称符号 */
 static value_t fl_function_name(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "function:name", nargs, 1);
@@ -2132,12 +2194,14 @@ static value_t fl_function_name(fl_context_t *fl_ctx, value_t *args, uint32_t na
     return fn_name(v);
 }
 
+/* 复制列表 */
 value_t fl_copylist(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "copy-list", nargs, 1);
     return copy_list(fl_ctx, args[0]);
 }
 
+/* 将多个列表连接成一个新列表 */
 value_t fl_append(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs == 0)
@@ -2175,6 +2239,7 @@ value_t fl_append(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return first;
 }
 
+/* list*：创建点对列表，最后一个参数作为列表尾部 */
 value_t fl_liststar(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs == 1) return args[0];
@@ -2182,6 +2247,7 @@ value_t fl_liststar(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return _list(fl_ctx, args, nargs, 1);
 }
 
+/* 获取当前调用栈的栈回溯 */
 value_t fl_stacktrace(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     (void)args;
@@ -2189,6 +2255,7 @@ value_t fl_stacktrace(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return _stacktrace(fl_ctx, fl_ctx->throwing_frame ? fl_ctx->throwing_frame : fl_ctx->curr_frame);
 }
 
+/* map 函数：将函数应用于一个或多个列表的每个元素，收集结果 */
 value_t fl_map1(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 2)
@@ -2261,6 +2328,7 @@ value_t fl_map1(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->Stack[first];
 }
 
+/* for-each 函数：为列表的每个元素调用函数（忽略返回值） */
 value_t fl_foreach(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs != 2)
@@ -2298,11 +2366,12 @@ static const builtinspec_t core_builtin_info[] = {
     { NULL, NULL }
 };
 
-// initialization -------------------------------------------------------------
+/* 初始化 ---------------------------------------------------------------- */
 
 extern void builtins_init(fl_context_t *fl_ctx);
 extern void comparehash_init(fl_context_t *fl_ctx);
 
+/* Lisp 解释器初始化：分配堆、栈，创建内置符号和初始绑定 */
 static void lisp_init(fl_context_t *fl_ctx, size_t initial_heapsize)
 {
     int i;
@@ -2419,8 +2488,9 @@ static void lisp_init(fl_context_t *fl_ctx, size_t initial_heapsize)
     builtins_init(fl_ctx);
 }
 
-// top level ------------------------------------------------------------------
+/* 顶层求值 ---------------------------------------------------------------- */
 
+/* 顶层求值：调用 eval 函数对表达式求值 */
 value_t fl_toplevel_eval(fl_context_t *fl_ctx, value_t expr)
 {
     return fl_applyn(fl_ctx, 1, symbol_value(fl_ctx->evalsym), expr);
@@ -2428,12 +2498,14 @@ value_t fl_toplevel_eval(fl_context_t *fl_ctx, value_t expr)
 
 extern void fl_init_julia_extensions(fl_context_t *fl_ctx);
 
+/* 初始化 flisp 上下文并加载 Julia 扩展 */
 void fl_init(fl_context_t *fl_ctx, size_t initial_heapsize)
 {
     lisp_init(fl_ctx, initial_heapsize);
     fl_init_julia_extensions(fl_ctx);
 }
 
+/* 从内存字符串加载系统映像（先包装为 iostream 再调用 fl_load_system_image） */
 int fl_load_system_image_str(fl_context_t *fl_ctx, char *str, size_t len)
 {
     value_t img = cvalue(fl_ctx, fl_ctx->iostreamtype, sizeof(ios_t));
@@ -2443,6 +2515,7 @@ int fl_load_system_image_str(fl_context_t *fl_ctx, char *str, size_t len)
     return fl_load_system_image(fl_ctx, img);
 }
 
+/* 加载系统引导映像：读取并执行引导阶段的 thunk 或绑定符号 */
 int fl_load_system_image(fl_context_t *fl_ctx, value_t sys_image_iostream)
 {
     value_t e;
@@ -2477,6 +2550,8 @@ int fl_load_system_image(fl_context_t *fl_ctx, value_t sys_image_iostream)
     FL_CATCH(fl_ctx) {
         ios_puts("fatal error during bootstrap:\n", ios_stderr);
         fl_print(fl_ctx, ios_stderr, fl_ctx->lasterror);
+        fl_print_memory(fl_ctx, ios_stderr, fl_ctx->lasterror, 0);
+        fl_print_mem_summary(fl_ctx, ios_stderr, fl_ctx->lasterror);
         ios_putc('\n', ios_stderr);
         return 1;
     }

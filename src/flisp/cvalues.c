@@ -25,6 +25,8 @@ value_t cvalue_typeof(fl_context_t *fl_ctx, value_t *args, uint32_t nargs);
 // trigger unconditional GC after this many bytes are allocated
 #define ALLOC_LIMIT_TRIGGER 67108864
 
+/* 终结器管理 */
+/* 将 cvalue 对象添加到终结器列表中，GC 回收时将调用其 finalize 回调 */
 void add_finalizer(fl_context_t *fl_ctx, cvalue_t *cv)
 {
     if (fl_ctx->nfinalizers == fl_ctx->maxfinalizers) {
@@ -39,6 +41,7 @@ void add_finalizer(fl_context_t *fl_ctx, cvalue_t *cv)
 }
 
 // remove dead objects from finalization list in-place
+/* 清理终结器列表 —— 移除已死亡对象，对存活对象执行 forwarding，对已死亡对象调用 finalize 并释放内存 */
 static void sweep_finalizers(fl_context_t *fl_ctx)
 {
     cvalue_t **lst = fl_ctx->Finalizers;
@@ -79,6 +82,7 @@ static void sweep_finalizers(fl_context_t *fl_ctx)
 }
 
 // compute the size of the metadata object for a cvalue
+/* 计算 cvalue 元数据对象的大小（以 word 为单位） */
 static size_t cv_nwords(fl_context_t *fl_ctx, cvalue_t *cv)
 {
     if (isinlined(cv)) {
@@ -90,17 +94,21 @@ static size_t cv_nwords(fl_context_t *fl_ctx, cvalue_t *cv)
     return CVALUE_NWORDS;
 }
 
+/* 标记 cvalue 为"自动释放" —— 设置 OWNED 位并将其加入终结器列表 */
 static void autorelease(fl_context_t *fl_ctx, cvalue_t *cv)
 {
     cv->type = (fltype_t*)(((uintptr_t)cv->type) | CV_OWNED_BIT);
     add_finalizer(fl_ctx, cv);
 }
 
+/* cv_autorelease —— 公开的自动释放接口 */
 void cv_autorelease(fl_context_t *fl_ctx, cvalue_t *cv)
 {
     autorelease(fl_ctx, cv);
 }
 
+/* cvalue 与 cprim 分配 */
+/* 分配一个 cprim（基本类型值），返回标记为 TAG_CPRIM 的值 */
 value_t cprim(fl_context_t *fl_ctx, fltype_t *type, size_t sz)
 {
     cprim_t *pcp = (cprim_t*)alloc_words(fl_ctx, CPRIM_NWORDS-1+NWORDS(sz));
@@ -108,6 +116,7 @@ value_t cprim(fl_context_t *fl_ctx, fltype_t *type, size_t sz)
     return tagptr(pcp, TAG_CPRIM);
 }
 
+/* 内部 cvalue 分配函数 —— 根据大小选择内联存储或堆分配，may_finalize 控制是否注册终结器 */
 static value_t _cvalue(fl_context_t *fl_ctx, fltype_t *type, size_t sz, int may_finalize)
 {
     cvalue_t *pcv;
@@ -148,16 +157,19 @@ static value_t _cvalue(fl_context_t *fl_ctx, fltype_t *type, size_t sz, int may_
     return tagptr(pcv, TAG_CVALUE);
 }
 
+/* cvalue —— 分配一个 cvalue（可能带有终结器） */
 value_t cvalue(fl_context_t *fl_ctx, fltype_t *type, size_t sz)
 {
     return _cvalue(fl_ctx, type, sz, 1);
 }
 
+/* cvalue_no_finalizer —— 分配一个不带终结器的 cvalue */
 value_t cvalue_no_finalizer(fl_context_t *fl_ctx, fltype_t *type, size_t sz)
 {
     return _cvalue(fl_ctx, type, sz, 0);
 }
 
+/* cvalue_from_data —— 从已有数据创建一个新的 cvalue，数据会被拷贝 */
 value_t cvalue_from_data(fl_context_t *fl_ctx, fltype_t *type, void *data, size_t sz)
 {
     value_t cv;
@@ -174,6 +186,7 @@ value_t cvalue_from_data(fl_context_t *fl_ctx, fltype_t *type, void *data, size_
 // user explicitly calls (autorelease ) on the result of this function.
 // 'parent' is an optional cvalue that this pointer is known to point
 // into; fl_ctx->NIL if none.
+/* cvalue_from_ref —— 通过引用已存在的指针创建 cvalue，不拷贝数据 */
 value_t cvalue_from_ref(fl_context_t *fl_ctx, fltype_t *type, void *ptr, size_t sz, value_t parent)
 {
     cvalue_t *pcv;
@@ -191,21 +204,25 @@ value_t cvalue_from_ref(fl_context_t *fl_ctx, fltype_t *type, void *ptr, size_t 
     return cv;
 }
 
+/* cvalue_string —— 分配一个指定大小的字符串 cvalue */
 value_t cvalue_string(fl_context_t *fl_ctx, size_t sz)
 {
     return cvalue(fl_ctx, fl_ctx->stringtype, sz);
 }
 
+/* cvalue_static_cstrn —— 用已有 C 字符串创建字符串 cvalue（不拷贝数据） */
 value_t cvalue_static_cstrn(fl_context_t *fl_ctx, const char *str, size_t n)
 {
     return cvalue_from_ref(fl_ctx, fl_ctx->stringtype, (char*)str, n, fl_ctx->NIL);
 }
 
+/* cvalue_static_cstring —— 用已有 C 字符串创建字符串 cvalue（自动计算长度） */
 value_t cvalue_static_cstring(fl_context_t *fl_ctx, const char *str)
 {
     return cvalue_static_cstrn(fl_ctx, str, strlen(str));
 }
 
+/* string_from_cstrn —— 从 C 字符串分配并拷贝一个新的字符串 cvalue */
 value_t string_from_cstrn(fl_context_t *fl_ctx, char *str, size_t n)
 {
     value_t v = cvalue_string(fl_ctx, n);
@@ -213,17 +230,20 @@ value_t string_from_cstrn(fl_context_t *fl_ctx, char *str, size_t n)
     return v;
 }
 
+/* string_from_cstr —— 从 C 字符串分配并拷贝一个新的字符串 cvalue（自动计算长度） */
 value_t string_from_cstr(fl_context_t *fl_ctx, char *str)
 {
     return string_from_cstrn(fl_ctx, str, strlen(str));
 }
 
+/* fl_isstring —— 判断一个值是否为字符串 */
 int fl_isstring(fl_context_t *fl_ctx, value_t v)
 {
     return (iscvalue(v) && cv_isstr(fl_ctx, (cvalue_t*)ptr(v)));
 }
 
 // convert to malloc representation (fixed address)
+/* cv_pin —— 将内联 cvalue 转换为堆分配表示（固定地址），用于需要稳定指针的场景 */
 void cv_pin(fl_context_t *fl_ctx, cvalue_t *cv)
 {
     if (!isinlined(cv))
@@ -237,6 +257,7 @@ void cv_pin(fl_context_t *fl_ctx, cvalue_t *cv)
     autorelease(fl_ctx, cv);
 }
 
+/* 基本类型初始化与构造器宏 */
 #define num_init(ctype, cnvt, tag)                                     \
 static int cvalue_##ctype##_init(fl_context_t *fl_ctx, fltype_t *type, \
                                  value_t arg, void *dest)              \
@@ -312,6 +333,7 @@ num_ctor(size, uint32, T_UINT32)
 num_ctor(float, float, T_FLOAT)
 num_ctor(double, double, T_DOUBLE)
 
+/* size_wrap —— 将 size_t 包装为 fixnum 或 size 类型的 cprim */
 value_t size_wrap(fl_context_t *fl_ctx, size_t sz)
 {
     if (fits_fixnum(sz))
@@ -320,6 +342,7 @@ value_t size_wrap(fl_context_t *fl_ctx, size_t sz)
     return mk_size(fl_ctx, sz);
 }
 
+/* tosize —— 将 Lisp 数值转换为 C size_t，失败时报告类型错误 */
 size_t tosize(fl_context_t *fl_ctx, value_t n, const char *fname)
 {
     if (isfixnum(n))
@@ -332,11 +355,13 @@ size_t tosize(fl_context_t *fl_ctx, value_t n, const char *fname)
     return 0;
 }
 
+/* isarray —— 判断值是否为数组类型（具有 eltype 的 cvalue） */
 static int isarray(value_t v)
 {
     return iscvalue(v) && cv_class((cvalue_t*)ptr(v))->eltype != NULL;
 }
 
+/* predict_arraylen —— 预测参数转换后的数组长度（支持向量、列表、数组、标量） */
 static size_t predict_arraylen(fl_context_t *fl_ctx, value_t arg)
 {
     if (isvector(arg))
@@ -350,6 +375,8 @@ static size_t predict_arraylen(fl_context_t *fl_ctx, value_t arg)
     return 1;
 }
 
+/* 数组操作 */
+/* cvalue_array_init —— 从 Lisp 值初始化 cvalue 数组的内存 */
 static int cvalue_array_init(fl_context_t *fl_ctx, fltype_t *ft, value_t arg, void *dest)
 {
     value_t type = ft->type;
@@ -411,6 +438,7 @@ static int cvalue_array_init(fl_context_t *fl_ctx, fltype_t *ft, value_t arg, vo
     return 0;
 }
 
+/* cvalue_array —— 创建并初始化一个 cvalue 数组（从 Lisp 参数列表） */
 value_t cvalue_array(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     size_t elsize, cnt, sz, i;
@@ -434,6 +462,7 @@ value_t cvalue_array(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 }
 
 // NOTE: v must be an array
+/* cvalue_arraylen —— 返回 cvalue 数组的元素个数 */
 size_t cvalue_arraylen(value_t v)
 {
     cvalue_t *cv = (cvalue_t*)ptr(v);
@@ -441,6 +470,7 @@ size_t cvalue_arraylen(value_t v)
 }
 
 // *palign is an output argument giving the alignment required by type
+/* ctype_sizeof —— 计算 C 类型的大小（按符号或类型表达式），同时返回对齐要求 */
 size_t ctype_sizeof(fl_context_t *fl_ctx, value_t type, int *palign)
 {
     if (type == fl_ctx->int8sym || type == fl_ctx->uint8sym || type == fl_ctx->bytesym) {
@@ -489,6 +519,7 @@ size_t ctype_sizeof(fl_context_t *fl_ctx, value_t type, int *palign)
 }
 
 // get pointer and size for any plain-old-data value
+/* to_sized_ptr —— 获取任意 plain-old-data 值的数据指针和大小 */
 void to_sized_ptr(fl_context_t *fl_ctx, value_t v, const char *fname, char **pdata, size_t *psz)
 {
     if (iscvalue(v)) {
@@ -514,6 +545,7 @@ void to_sized_ptr(fl_context_t *fl_ctx, value_t v, const char *fname, char **pda
     type_error(fl_ctx, fname, "plain-old-data", v);
 }
 
+/* cvalue_sizeof —— 返回一个值或类型的字节大小（Lisp 中的 sizeof 操作） */
 value_t cvalue_sizeof(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "sizeof", nargs, 1);
@@ -526,6 +558,7 @@ value_t cvalue_sizeof(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, n);
 }
 
+/* cvalue_typeof —— 返回 Lisp 值的类型（符号表示） */
 value_t cvalue_typeof(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "typeof", nargs, 1);
@@ -549,6 +582,7 @@ value_t cvalue_typeof(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return cv_type((cvalue_t*)ptr(args[0]));
 }
 
+/* cvalue_relocate —— GC 迁移动词：将 cvalue 复制到新位置并更新 forwarding 指针 */
 static value_t cvalue_relocate(fl_context_t *fl_ctx, value_t v)
 {
     size_t nw;
@@ -569,6 +603,7 @@ static value_t cvalue_relocate(fl_context_t *fl_ctx, value_t v)
     return ncv;
 }
 
+/* cvalue_copy —— 深拷贝一个 cvalue，包括其数据 */
 value_t cvalue_copy(fl_context_t *fl_ctx, value_t v)
 {
     assert(iscvalue(v));
@@ -597,6 +632,7 @@ value_t cvalue_copy(fl_context_t *fl_ctx, value_t v)
     return tagptr(ncv, TAG_CVALUE);
 }
 
+/* fl_copy —— Lisp 中的 copy 函数，仅支持 POD 类型的值 */
 value_t fl_copy(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "copy", nargs, 1);
@@ -609,6 +645,7 @@ value_t fl_copy(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return cvalue_copy(fl_ctx, args[0]);
 }
 
+/* fl_podp —— 判断值是否为 plain-old-data（POD）类型 */
 value_t fl_podp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "plain-old-data?", nargs, 1);
@@ -617,6 +654,7 @@ value_t fl_podp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
         fl_ctx->T : fl_ctx->F;
 }
 
+/* cvalue_init —— 通过类型的 init 函数将 Lisp 值转换为 C 内存表示 */
 static void cvalue_init(fl_context_t *fl_ctx, fltype_t *type, value_t v, void *dest)
 {
     cvinitfunc_t f=type->init;
@@ -627,6 +665,7 @@ static void cvalue_init(fl_context_t *fl_ctx, fltype_t *type, value_t v, void *d
     f(fl_ctx, type, v, dest);
 }
 
+/* sym_to_numtype —— 将类型符号映射为对应的 numerictype_t 枚举值 */
 static numerictype_t sym_to_numtype(fl_context_t *fl_ctx, value_t type)
 {
     if (type == fl_ctx->int8sym)
@@ -672,6 +711,7 @@ static numerictype_t sym_to_numtype(fl_context_t *fl_ctx, value_t type)
 // this provides (1) a way to allocate values with a shared type for
 // efficiency, (2) a uniform interface for allocating cvalues of any
 // type, including user-defined.
+/* cvalue_new —— Lisp 的 c-value 构造函数，支持任意类型（包括用户自定义类型） */
 value_t cvalue_new(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 1 || nargs > 2)
@@ -703,6 +743,7 @@ value_t cvalue_new(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 }
 
 // NOTE: this only compares lexicographically; it ignores numeric formats
+/* cvalue_compare —— 比较两个 cvalue 的内容（按字典序比较字节） */
 value_t cvalue_compare(value_t a, value_t b)
 {
     cvalue_t *ca = (cvalue_t*)ptr(a);
@@ -722,6 +763,7 @@ value_t cvalue_compare(value_t a, value_t b)
     return fixnum(diff);
 }
 
+/* check_addr_args —— 检查数组和索引参数的有效性，返回数据指针和索引 */
 static void check_addr_args(fl_context_t *fl_ctx, const char *fname, value_t arr,
                             value_t ind, char **data, size_t *index)
 {
@@ -734,6 +776,7 @@ static void check_addr_args(fl_context_t *fl_ctx, const char *fname, value_t arr
         bounds_error(fl_ctx, fname, arr, ind);
 }
 
+/* cvalue_array_aref —— 从 cvalue 数组中读取指定索引的元素 */
 static value_t cvalue_array_aref(fl_context_t *fl_ctx, value_t *args)
 {
     char *data; size_t index;
@@ -767,6 +810,7 @@ static value_t cvalue_array_aref(fl_context_t *fl_ctx, value_t *args)
     return el;
 }
 
+/* cvalue_array_aset —— 设置 cvalue 数组中指定索引的元素 */
 static value_t cvalue_array_aset(fl_context_t *fl_ctx, value_t *args)
 {
     char *data; size_t index;
@@ -777,6 +821,7 @@ static value_t cvalue_array_aset(fl_context_t *fl_ctx, value_t *args)
     return args[2];
 }
 
+/* fl_builtin —— 根据名称查找已加载的 C 函数并返回其 cvalue 包装 */
 value_t fl_builtin(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "builtin", nargs, 1);
@@ -788,6 +833,7 @@ value_t fl_builtin(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return tagptr(cv, TAG_CVALUE);
 }
 
+/* cbuiltin —— 注册一个 C 函数为 Lisp 中的 builtin，返回其 cvalue 表示 */
 value_t cbuiltin(fl_context_t *fl_ctx, const char *name, builtin_t f)
 {
     cvalue_t *cv = (cvalue_t*)malloc(CVALUE_NWORDS * sizeof(value_t));
@@ -804,6 +850,7 @@ value_t cbuiltin(fl_context_t *fl_ctx, const char *name, builtin_t f)
     return tagptr(cv, TAG_CVALUE);
 }
 
+/* 算术与位运算 */
 static value_t fl_logand(fl_context_t *fl_ctx, value_t *args, uint32_t nargs);
 static value_t fl_logior(fl_context_t *fl_ctx, value_t *args, uint32_t nargs);
 static value_t fl_logxor(fl_context_t *fl_ctx, value_t *args, uint32_t nargs);
@@ -840,6 +887,7 @@ static const builtinspec_t cvalues_builtin_info[] = {
     fl_ctx->name##type = get_type(fl_ctx, fl_ctx->name##sym);   \
     fl_ctx->name##type->init = &cvalue_##ctype##_init
 
+/* cvalues_init —— 初始化 cvalues 子系统，注册所有基本类型构造函数 */
 static void cvalues_init(fl_context_t *fl_ctx)
 {
     fl_ctx->malloc_pressure = 0;
@@ -909,6 +957,7 @@ static void cvalues_init(fl_context_t *fl_ctx)
 
 #define RETURN_NUM_AS(fl_ctx, var, type) return(mk_##type(fl_ctx, (fl_##type##_t)var))
 
+/* return_from_uint64 —— 将 uint64 值转换为合适的 Lisp 数值表示（fixnum / int64 / uint64） */
 value_t return_from_uint64(fl_context_t *fl_ctx, uint64_t Uaccum)
 {
     if (fits_fixnum(Uaccum)) {
@@ -923,6 +972,7 @@ value_t return_from_uint64(fl_context_t *fl_ctx, uint64_t Uaccum)
     RETURN_NUM_AS(fl_ctx, Uaccum, int32);
 }
 
+/* return_from_int64 —— 将 int64 值转换为合适的 Lisp 数值表示（fixnum / int32 / int64） */
 value_t return_from_int64(fl_context_t *fl_ctx, int64_t Saccum)
 {
     if (fits_fixnum(Saccum)) {
@@ -934,6 +984,7 @@ value_t return_from_int64(fl_context_t *fl_ctx, int64_t Saccum)
     RETURN_NUM_AS(fl_ctx, Saccum, int32);
 }
 
+/* fl_add_any —— 通用加法实现，支持 fixnum 和 cprim 数值，carryIn 为初始进位 */
 static value_t fl_add_any(fl_context_t *fl_ctx, value_t *args, uint32_t nargs, fixnum_t carryIn)
 {
     uint64_t Uaccum=0;
@@ -1003,6 +1054,7 @@ static value_t fl_add_any(fl_context_t *fl_ctx, value_t *args, uint32_t nargs, f
     return return_from_uint64(fl_ctx, Uaccum);
 }
 
+/* fl_neg —— 一元负数运算 */
 static value_t fl_neg(fl_context_t *fl_ctx, value_t n)
 {
     if (isfixnum(n)) {
@@ -1042,6 +1094,7 @@ static value_t fl_neg(fl_context_t *fl_ctx, value_t n)
     type_error(fl_ctx, "-", "number", n);
 }
 
+/* fl_mul_any —— 通用乘法实现，支持 fixnum 和 cprim 数值 */
 static value_t fl_mul_any(fl_context_t *fl_ctx, value_t *args, uint32_t nargs, int64_t Saccum)
 {
     uint64_t Uaccum=1;
@@ -1104,6 +1157,7 @@ static value_t fl_mul_any(fl_context_t *fl_ctx, value_t *args, uint32_t nargs, i
     return return_from_uint64(fl_ctx, Uaccum);
 }
 
+/* num_to_ptr —— 将 Lisp 数值拆分为 fixnum 值、数值类型和数据指针 */
 static int num_to_ptr(value_t a, fixnum_t *pi, numerictype_t *pt, void **pp)
 {
     cprim_t *cp;
@@ -1131,6 +1185,7 @@ static int num_to_ptr(value_t a, fixnum_t *pi, numerictype_t *pt, void **pp)
           inexact not considered equal to exact
   fname: if not NULL, throws type errors, else returns 2 for type errors
 */
+/* numeric_compare —— 比较两个数值的大小或相等性 */
 int numeric_compare(fl_context_t *fl_ctx, value_t a, value_t b, int eq, int eqnans, char *fname)
 {
     int_t ai, bi;
@@ -1164,11 +1219,13 @@ __declspec(noreturn) static void DivideByZeroError(fl_context_t *fl_ctx);
 static void DivideByZeroError(fl_context_t *fl_ctx) __attribute__ ((__noreturn__));
 #endif
 
+/* DivideByZeroError —— 抛出除零错误 */
 static void DivideByZeroError(fl_context_t *fl_ctx)
 {
     lerror(fl_ctx, fl_ctx->DivideError, "/: division by zero");
 }
 
+/* fl_div2 —— 浮点除法运算 */
 static value_t fl_div2(fl_context_t *fl_ctx, value_t a, value_t b)
 {
     double da, db;
@@ -1194,6 +1251,7 @@ static value_t fl_div2(fl_context_t *fl_ctx, value_t a, value_t b)
     return mk_double(fl_ctx, da);
 }
 
+/* fl_idiv2 —— 整数除法运算 */
 static value_t fl_idiv2(fl_context_t *fl_ctx, value_t a, value_t b)
 {
     int_t ai, bi;
@@ -1238,6 +1296,7 @@ static value_t fl_idiv2(fl_context_t *fl_ctx, value_t a, value_t b)
     DivideByZeroError(fl_ctx);
 }
 
+/* fl_bitwise_op —— 通用位运算（0=and, 1=or, 2=xor） */
 static value_t fl_bitwise_op(fl_context_t *fl_ctx, value_t a, value_t b, int opcode, char *fname)
 {
     int_t ai, bi;
@@ -1303,6 +1362,7 @@ static value_t fl_bitwise_op(fl_context_t *fl_ctx, value_t a, value_t b, int opc
     return fl_ctx->NIL;
 }
 
+/* fl_logand —— 按位与（logand），零参数时返回 -1 */
 static value_t fl_logand(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     value_t v, e;
@@ -1319,6 +1379,7 @@ static value_t fl_logand(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return v;
 }
 
+/* fl_logior —— 按位或（logior），零参数时返回 0 */
 static value_t fl_logior(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     value_t v, e;
@@ -1335,6 +1396,7 @@ static value_t fl_logior(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return v;
 }
 
+/* fl_logxor —— 按位异或（logxor），零参数时返回 0 */
 static value_t fl_logxor(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     value_t v, e;
@@ -1351,6 +1413,7 @@ static value_t fl_logxor(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return v;
 }
 
+/* fl_lognot —— 按位取反（lognot） */
 static value_t fl_lognot(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "lognot", nargs, 1);
@@ -1379,6 +1442,7 @@ static value_t fl_lognot(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     type_error(fl_ctx, "lognot", "integer", a);
 }
 
+/* fl_ash —— 算术移位（ash），正数为左移，负数为右移 */
 static value_t fl_ash(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     fixnum_t n;

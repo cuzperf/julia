@@ -20,6 +20,7 @@
 extern "C" {
 #endif
 
+/* 计算列表长度（cons 链中节点数量） */
 size_t llength(value_t v)
 {
     size_t n = 0;
@@ -30,6 +31,8 @@ size_t llength(value_t v)
     return n;
 }
 
+/* 列表操作函数 */
+/* 列表拼接 —— 将多个列表破坏性地连接在一起，修改最后一个 cons 的 cdr */
 static value_t fl_nconc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs == 0)
@@ -56,6 +59,7 @@ static value_t fl_nconc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return first;
 }
 
+/* assq —— 在关联列表中查找关键字（使用 eq 比较） */
 static value_t fl_assq(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "assq", nargs, 2);
@@ -72,6 +76,7 @@ static value_t fl_assq(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->F;
 }
 
+/* memq —— 判断元素是否在列表中（使用 eq 比较），返回从匹配位置开始的子列表 */
 static value_t fl_memq(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "memq", nargs, 2);
@@ -84,6 +89,7 @@ static value_t fl_memq(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->F;
 }
 
+/* length —— 返回序列（向量、字符串、cvalue 数组或 cons 列表）的长度 */
 static value_t fl_length(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "length", nargs, 1);
@@ -113,12 +119,15 @@ static value_t fl_length(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     type_error(fl_ctx, "length", "sequence", a);
 }
 
+/* 错误处理与控制流 */
+/* raise —— 抛出一个错误/异常 */
 static value_t fl_f_raise(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "raise", nargs, 1);
     fl_raise(fl_ctx, args[0]);
 }
 
+/* exit —— 退出进程，可选退出码 */
 static value_t fl_exit(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs > 0)
@@ -127,6 +136,8 @@ static value_t fl_exit(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->NIL;
 }
 
+/* 符号与绑定操作 */
+/* symbol —— 将字符串转换为符号 */
 static value_t fl_symbol(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "symbol", nargs, 1);
@@ -135,6 +146,7 @@ static value_t fl_symbol(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return symbol(fl_ctx, (char*)cvalue_data(args[0]));
 }
 
+/* keyword? —— 判断对象是否为关键字（以 : 开头的符号） */
 static value_t fl_keywordp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "keyword?", nargs, 1);
@@ -142,6 +154,7 @@ static value_t fl_keywordp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
             iskeyword((symbol_t*)ptr(args[0]))) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* top-level-value —— 获取符号的顶层绑定值 */
 static value_t fl_top_level_value(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "top-level-value", nargs, 1);
@@ -151,6 +164,7 @@ static value_t fl_top_level_value(fl_context_t *fl_ctx, value_t *args, uint32_t 
     return sym->binding;
 }
 
+/* set-top-level-value! —— 设置符号的顶层绑定值（常量符号不可修改） */
 static value_t fl_set_top_level_value(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "set-top-level-value!", nargs, 2);
@@ -160,6 +174,7 @@ static value_t fl_set_top_level_value(fl_context_t *fl_ctx, value_t *args, uint3
     return args[1];
 }
 
+/* 递归收集全局环境中的所有符号到列表中 */
 static void global_env_list(fl_context_t *fl_ctx, symbol_t *root, value_t *pv)
 {
     while (root != NULL) {
@@ -171,6 +186,7 @@ static void global_env_list(fl_context_t *fl_ctx, symbol_t *root, value_t *pv)
     }
 }
 
+/* environment —— 返回当前全局环境中的所有绑定符号列表 */
 value_t fl_global_env(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     (void)args;
@@ -182,6 +198,8 @@ value_t fl_global_env(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return lst;
 }
 
+/* 类型与常量谓词 */
+/* constant? —— 判断对象是否为常量（常量符号、quote 形式、或自求值对象） */
 static value_t fl_constantp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "constant?", nargs, 1);
@@ -195,6 +213,7 @@ static value_t fl_constantp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->T;
 }
 
+/* integer-valued? —— 判断对象是否为整数值（fixnum 或无损转换为整数的浮点数） */
 static value_t fl_integer_valuedp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "integer-valued?", nargs, 1);
@@ -224,6 +243,7 @@ static value_t fl_integer_valuedp(fl_context_t *fl_ctx, value_t *args, uint32_t 
     return fl_ctx->F;
 }
 
+/* integer? —— 判断对象是否为整数类型（fixnum 或整数类 cprim） */
 static value_t fl_integerp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "integer?", nargs, 1);
@@ -233,6 +253,8 @@ static value_t fl_integerp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
         fl_ctx->T : fl_ctx->F;
 }
 
+/* 数值转换 */
+/* fixnum —— 将数字转换为 fixnum（若可能） */
 static value_t fl_fixnum(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "fixnum", nargs, 1);
@@ -246,12 +268,14 @@ static value_t fl_fixnum(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     type_error(fl_ctx, "fixnum", "number", args[0]);
 }
 
+/* truncate —— 对数字截断取整 */
 static value_t fl_truncate(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "truncate", nargs, 1);
     if (isfixnum(args[0]))
         return args[0];
     if (iscprim(args[0])) {
+        /* 向量操作 */
         cprim_t *cp = (cprim_t*)ptr(args[0]);
         void *data = cp_data(cp);
         numerictype_t nt = cp_numtype(cp);
@@ -274,6 +298,8 @@ static value_t fl_truncate(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     type_error(fl_ctx, "truncate", "number", args[0]);
 }
 
+/* 向量操作 */
+/* vector.alloc —— 分配一个向量，可选初始值填充 */
 static value_t fl_vector_alloc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     fixnum_t i;
@@ -296,6 +322,8 @@ static value_t fl_vector_alloc(fl_context_t *fl_ctx, value_t *args, uint32_t nar
     return v;
 }
 
+/* 时间与文件系统操作 */
+/* time.now —— 返回当前时间（Unix 时间戳，双精度浮点数） */
 static value_t fl_time_now(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "time.now", nargs, 0);
@@ -303,6 +331,7 @@ static value_t fl_time_now(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return mk_double(fl_ctx, jl_clock_now());
 }
 
+/* path.cwd —— 获取或设置当前工作目录 */
 static value_t fl_path_cwd(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     int err;
@@ -323,6 +352,8 @@ static value_t fl_path_cwd(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->T;
 }
 
+/* 环境变量操作 */
+/* os.getenv —— 获取环境变量值 */
 static value_t fl_os_getenv(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "os.getenv", nargs, 1);
@@ -334,6 +365,7 @@ static value_t fl_os_getenv(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return cvalue_static_cstring(fl_ctx, val);
 }
 
+/* os.setenv —— 设置或删除环境变量 */
 static value_t fl_os_setenv(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "os.setenv", nargs, 2);

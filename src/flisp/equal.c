@@ -4,6 +4,8 @@
 // comparable tag
 #define cmptag(v) (isfixnum(v) ? TAG_NUM : tag(v))
 
+/* 相等性比较辅助函数 */
+/* eq_class —— 在并查集中查找 key 的等价类代表 */
 static value_t eq_class(fl_context_t *fl_ctx, htable_t *table, value_t key)
 {
     value_t c = (value_t)ptrhash_get(table, (void*)key);
@@ -14,6 +16,7 @@ static value_t eq_class(fl_context_t *fl_ctx, htable_t *table, value_t key)
     return eq_class(fl_ctx, table, c);
 }
 
+/* eq_union —— 在并查集中合并 a 和 b 的等价类 */
 static void eq_union(fl_context_t *fl_ctx, htable_t *table, value_t a,
                      value_t b, value_t c, value_t cb)
 {
@@ -27,6 +30,7 @@ static void eq_union(fl_context_t *fl_ctx, htable_t *table, value_t a,
 static value_t bounded_compare(fl_context_t *fl_ctx, value_t a, value_t b, int bound, int eq);
 static value_t cyc_compare(fl_context_t *fl_ctx, value_t a, value_t b, htable_t *table, int eq);
 
+/* bounded_vector_compare —— 在有限递归深度内比较两个向量的元素 */
 static value_t bounded_vector_compare(fl_context_t *fl_ctx, value_t a, value_t b, int bound, int eq)
 {
     size_t la = vector_size(a);
@@ -46,6 +50,7 @@ static value_t bounded_vector_compare(fl_context_t *fl_ctx, value_t a, value_t b
 
 // strange comparisons are resolved arbitrarily but consistently.
 // ordering: number < cprim < function < vector < cvalue < symbol < cons
+/* bounded_compare —— 在有限递归深度内比较两个值的相等性或顺序 */
 static value_t bounded_compare(fl_context_t *fl_ctx, value_t a, value_t b, int bound, int eq)
 {
     value_t d;
@@ -124,6 +129,7 @@ static value_t bounded_compare(fl_context_t *fl_ctx, value_t a, value_t b, int b
     return (taga < tagb) ? fixnum(-1) : fixnum(1);
 }
 
+/* cyc_vector_compare —— 检测环的情况下比较两个向量，使用并查集追踪已访问对象 */
 static value_t cyc_vector_compare(fl_context_t *fl_ctx, value_t a,
                                   value_t b, htable_t *table, int eq)
 {
@@ -172,6 +178,7 @@ static value_t cyc_vector_compare(fl_context_t *fl_ctx, value_t a,
     return fixnum(0);
 }
 
+/* cyc_compare —— 在可能存在环的数据结构中比较两个值的相等性（使用并查集处理循环引用） */
 static value_t cyc_compare(fl_context_t *fl_ctx, value_t a, value_t b, htable_t *table, int eq)
 {
     value_t d, ca, cb;
@@ -241,12 +248,14 @@ static value_t cyc_compare(fl_context_t *fl_ctx, value_t a, value_t b, htable_t 
     return bounded_compare(fl_ctx, a, b, 1, eq);
 }
 
+/* comparehash_init —— 初始化比较/哈希子系统的全局哈希表 */
 void comparehash_init(fl_context_t *fl_ctx)
 {
     htable_new(&fl_ctx->equal_eq_hashtable, 512);
 }
 
 // 'eq' means unordered comparison is sufficient
+/* compare_ —— 比较两个值：先尝试有限深度比较，若超限则使用环检测比较 */
 static value_t compare_(fl_context_t *fl_ctx, value_t a, value_t b, int eq)
 {
     value_t guess = bounded_compare(fl_ctx, a, b, BOUNDED_COMPARE_BOUND, eq);
@@ -257,11 +266,13 @@ static value_t compare_(fl_context_t *fl_ctx, value_t a, value_t b, int eq)
     return guess;
 }
 
+/* fl_compare —— 全序比较，返回 -1、0 或 1 */
 value_t fl_compare(fl_context_t *fl_ctx, value_t a, value_t b)
 {
     return compare_(fl_ctx, a, b, 0);
 }
 
+/* fl_equal —— 判断两个值是否相等（支持递归和环检测） */
 value_t fl_equal(fl_context_t *fl_ctx, value_t a, value_t b)
 {
     if (eq_comparable(a, b))
@@ -285,7 +296,9 @@ value_t fl_equal(fl_context_t *fl_ctx, value_t a, value_t b)
 #define doublehash(a) int64to32hash(a)
 #endif
 
+/* 哈希计算 */
 // *oob: output argument, means we hit the limit specified by 'bound'
+/* bounded_hash —— 在有限递归深度内计算值的哈希值，*oob 指示是否超出深度限制 */
 static uintptr_t bounded_hash(fl_context_t *fl_ctx, value_t a, int bound, int *oob)
 {
     *oob = 0;
@@ -363,6 +376,7 @@ static uintptr_t bounded_hash(fl_context_t *fl_ctx, value_t a, int bound, int *o
     return 0;
 }
 
+/* equal_lispvalue —— 判断两个 Lisp 值是否相等（用于哈希表键比较） */
 int equal_lispvalue(fl_context_t *fl_ctx, value_t a, value_t b)
 {
     if (eq_comparable(a, b))
@@ -370,6 +384,7 @@ int equal_lispvalue(fl_context_t *fl_ctx, value_t a, value_t b)
     return (numval(compare_(fl_ctx, a, b, 1))==0);
 }
 
+/* hash_lispvalue —— 计算 Lisp 值的哈希值 */
 uintptr_t hash_lispvalue(fl_context_t *fl_ctx, value_t a)
 {
     int oob = 0;
@@ -377,6 +392,7 @@ uintptr_t hash_lispvalue(fl_context_t *fl_ctx, value_t a)
     return n;
 }
 
+/* fl_hash —— Lisp 中的 hash 函数，计算值的哈希码 */
 value_t fl_hash(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "hash", nargs, 1);

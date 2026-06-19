@@ -1,5 +1,10 @@
 #include "equalhash.h"
 
+/*==================================================================
+ * 类型系统
+ *==================================================================*/
+
+/* 获取或创建类型描述符（fltype_t），支持符号和复合类型 */
 fltype_t *get_type(fl_context_t *fl_ctx, value_t t)
 {
     fltype_t *ft;
@@ -56,6 +61,7 @@ fltype_t *get_type(fl_context_t *fl_ctx, value_t t)
     return ft;
 }
 
+/* 获取数组类型的描述符，自动缓存到元素类型的 artype 字段 */
 fltype_t *get_array_type(fl_context_t *fl_ctx, value_t eltype)
 {
     fltype_t *et = get_type(fl_ctx, eltype);
@@ -64,6 +70,7 @@ fltype_t *get_array_type(fl_context_t *fl_ctx, value_t eltype)
     return get_type(fl_ctx, fl_list2(fl_ctx, fl_ctx->arraysym, eltype));
 }
 
+/* 定义不透明类型（opaque type），指定大小、虚函数表和初始化函数 */
 fltype_t *define_opaque_type(value_t sym, size_t sz, const cvtable_t *vtab,
                              cvinitfunc_t init)
 {
@@ -80,6 +87,7 @@ fltype_t *define_opaque_type(value_t sym, size_t sz, const cvtable_t *vtab,
     return ft;
 }
 
+/* 移动后修正类型表中的值引用（GC relocation） */
 void relocate_typetable(fl_context_t *fl_ctx)
 {
     htable_t *h = &fl_ctx->TypeTable;

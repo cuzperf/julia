@@ -19,6 +19,7 @@
 extern "C" {
 #endif
 
+/* equalhash 哈希表 —— 使用 equal_lispvalue 做键比较、hash_lispvalue 做哈希的哈希表实现 */
 HTIMPL_R(equalhash, _hash_lispvalue_, _equal_lispvalue_, _HTIMPL_IDENTITY_KEYALLOC, _HTIMPL_NOOP_KEYFREE)
 
 #ifdef __cplusplus

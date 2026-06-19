@@ -17,6 +17,8 @@ extern "C" {
 #include "htable.inc"
 HTIMPL_R(wcharhash, _hash_wchar_, _equal_wchar_, _HTIMPL_IDENTITY_KEYALLOC, _HTIMPL_NOOP_KEYFREE)
 
+/* === 字符分类函数 === */
+
 static int is_uws(uint32_t wc)
 {
     return (wc==9 || wc==10 || wc==11 || wc==12 || wc==13 || wc==32 ||
@@ -26,11 +28,13 @@ static int is_uws(uint32_t wc)
             wc==8232 || wc==8233 || wc==8239 || wc==8287 || wc==12288);
 }
 
+/* 检查是否为 Unicode BOM（字节顺序标记） */
 static int is_bom(uint32_t wc)
 {
     return wc == 0xFEFF;
 }
 
+/* 安全地预读一个UTF-8字符，若UTF-8序列非法则报错 */
 static int safe_peekutf8(fl_context_t *fl_ctx, ios_t *s, uint32_t *pwc)
 {
     int result = ios_peekutf8(s, pwc);
@@ -39,6 +43,7 @@ static int safe_peekutf8(fl_context_t *fl_ctx, ios_t *s, uint32_t *pwc)
     return result;
 }
 
+/* 跳过输入流中的空白字符（包括Unicode空白和BOM），返回是否跳过了任何空白 */
 value_t fl_skipws(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "skip-ws", nargs, 2);
@@ -64,6 +69,9 @@ value_t fl_skipws(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return skipped;
 }
 
+/* === 标识符处理函数 === */
+
+/* 根据Unicode类别判断字符能否作为标识符起始字符 */
 static int is_wc_cat_id_start(uint32_t wc, utf8proc_category_t cat)
 {
     return (cat == UTF8PROC_CATEGORY_LU || cat == UTF8PROC_CATEGORY_LL ||
@@ -124,6 +132,7 @@ static int is_wc_cat_id_start(uint32_t wc, utf8proc_category_t cat)
             (wc >= 0x1D7CE && wc <= 0x1D7E1)); // 𝟎 through 𝟗 (inclusive), 𝟘 through 𝟡 (inclusive)
 }
 
+/* 判断Unicode字符是否能作为Julia标识符的起始字符 */
 JL_DLLEXPORT int jl_id_start_char(uint32_t wc)
 {
     if ((wc >= 'A' && wc <= 'Z') || (wc >= 'a' && wc <= 'z') || wc == '_')
@@ -136,6 +145,7 @@ JL_DLLEXPORT int jl_id_start_char(uint32_t wc)
     return is_wc_cat_id_start(wc, utf8proc_category((utf8proc_int32_t) wc));
 }
 
+/* 判断Unicode字符是否能作为Julia标识符的内部字符（包含起始字符及数字、修饰符等） */
 JL_DLLEXPORT int jl_id_char(uint32_t wc)
 {
     if ((wc >= 'A' && wc <= 'Z') || (wc >= 'a' && wc <= 'z') || wc == '_' ||
@@ -160,6 +170,7 @@ JL_DLLEXPORT int jl_id_char(uint32_t wc)
 #include "julia_opsuffs.h"
 
 // chars that can follow an operator (e.g. +) and be parsed as part of the operator
+/* 判断字符能否作为运算符后缀（如组合字符、上标/下标等） */
 JL_DLLEXPORT int jl_op_suffix_char(uint32_t wc)
 {
     static htable_t jl_opsuffs; // XXX: requires uv_once
@@ -180,6 +191,7 @@ JL_DLLEXPORT int jl_op_suffix_char(uint32_t wc)
 }
 
 // chars that we will never allow to be part of a valid non-operator identifier
+/* 判断哪些字符绝对不可能成为有效的非运算符标识符的一部分 */
 static int never_id_char(uint32_t wc)
 {
      utf8proc_category_t cat = utf8proc_category((utf8proc_int32_t) wc);
@@ -205,6 +217,7 @@ static int never_id_char(uint32_t wc)
           (wc == 0xff3b || wc == 0xff3d));
 }
 
+/* Flisp函数：判断一个wchar字符是否为有效的标识符字符 */
 value_t fl_julia_identifier_char(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "identifier-char?", nargs, 1);
@@ -214,6 +227,7 @@ value_t fl_julia_identifier_char(fl_context_t *fl_ctx, value_t *args, uint32_t n
     return jl_id_char(wc) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* Flisp函数：判断一个wchar字符能否作为标识符的起始字符 */
 value_t fl_julia_identifier_start_char(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "identifier-start-char?", nargs, 1);
@@ -223,6 +237,7 @@ value_t fl_julia_identifier_start_char(fl_context_t *fl_ctx, value_t *args, uint
     return jl_id_start_char(wc) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* Flisp函数：判断一个wchar字符是否绝对不可能出现在标识符中 */
 value_t fl_julia_never_identifier_char(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "never-identifier-char?", nargs, 1);
@@ -233,6 +248,7 @@ value_t fl_julia_never_identifier_char(fl_context_t *fl_ctx, value_t *args, uint
 }
 
 
+/* Flisp函数：判断一个wchar字符能否作为运算符的后缀字符 */
 value_t fl_julia_op_suffix_char(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "op-suffix-char?", nargs, 1);
@@ -242,6 +258,7 @@ value_t fl_julia_op_suffix_char(fl_context_t *fl_ctx, value_t *args, uint32_t na
     return jl_op_suffix_char(wc) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* Flisp函数：移除运算符符号的后缀部分，返回纯运算符符号 */
 value_t fl_julia_strip_op_suffix(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "strip-op-suffix", nargs, 1);
@@ -266,6 +283,7 @@ value_t fl_julia_strip_op_suffix(fl_context_t *fl_ctx, value_t *args, uint32_t n
 }
 
 /* check whether arg is a symbol that consists solely of underscores. */
+/* Flisp函数：判断一个符号是否仅由下划线组成（如 _、__、___） */
 value_t fl_julia_underscore_symbolp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "underscore-symbol?", nargs, 1);
@@ -278,6 +296,9 @@ value_t fl_julia_underscore_symbolp(fl_context_t *fl_ctx, value_t *args, uint32_
 
 #include "julia_charmap.h"
 
+/* === Unicode 规范化函数 === */
+
+/* 自定义字符映射表，用于Unicode规范化过程中的额外替换 */
 utf8proc_int32_t jl_charmap_map(utf8proc_int32_t c, void *ctx)
 {
     static htable_t jl_charmap; // XXX: requires uv_once
@@ -301,6 +322,7 @@ utf8proc_int32_t jl_charmap_map(utf8proc_int32_t c, void *ctx)
 
 // return NFC-normalized UTF8-encoded version of s, with
 // additional custom normalizations defined by jl_charmap above.
+/* 返回字符串的NFC规范化形式（UTF-8编码），并应用自定义字符映射 */
 static char *normalize(fl_context_t *fl_ctx, char *s)
 {
     // options equivalent to utf8proc_NFC:
@@ -327,6 +349,7 @@ error:
             utf8proc_errmsg(result));
 }
 
+/* Flisp函数：从输入流中累积读取一个完整的Julia标识符并返回规范化后的符号 */
 value_t fl_accum_julia_symbol(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "accum-julia-symbol", nargs, 2);
@@ -358,6 +381,7 @@ value_t fl_accum_julia_symbol(fl_context_t *fl_ctx, value_t *args, uint32_t narg
 }
 
 /* convert a string to a symbol, first applying normalization */
+/* Flisp函数：将字符串转换为符号，并先应用Unicode NFC规范化 */
 value_t fl_string2normsymbol(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "string->normsymbol", nargs, 1);
@@ -366,6 +390,7 @@ value_t fl_string2normsymbol(fl_context_t *fl_ctx, value_t *args, uint32_t nargs
     return symbol(fl_ctx, normalize(fl_ctx, (char*)cvalue_data(args[0])));
 }
 
+/* 遍历UTF-8编码的后续字节，构造完整的Unicode码点 */
 static uint32_t _iterate_continued(uint8_t *s, size_t n, size_t *i, uint32_t u) {
     if (u < 0xc0000000) { ++*i; return u; }
     uint8_t b;
@@ -388,6 +413,7 @@ static uint32_t _iterate_continued(uint8_t *s, size_t n, size_t *i, uint32_t u) 
     return u;
 }
 
+/* 检查一个字节序列是否恰好包含一个有效的Julia字符 */
 static uint32_t _string_only_julia_char(uint8_t *s, size_t n) {
     if (!(0 < n && n <= 4))
         return -1;
@@ -403,6 +429,7 @@ static uint32_t _string_only_julia_char(uint8_t *s, size_t n) {
     return u;
 }
 
+/* Flisp函数：判断一个字符串是否恰好包含一个Julia字符，若是则返回该字符 */
 value_t fl_string_only_julia_char(fl_context_t *fl_ctx, value_t *args, uint32_t nargs) {
     argcount(fl_ctx, "string.only-julia-char", nargs, 1);
     if (!fl_isstring(fl_ctx, args[0]))
@@ -415,6 +442,7 @@ value_t fl_string_only_julia_char(fl_context_t *fl_ctx, value_t *args, uint32_t 
     return fl_list2(fl_ctx, fl_ctx->jl_char_sym, mk_uint32(fl_ctx, u));
 }
 
+/* Julia Flisp内置函数注册表 */
 static const builtinspec_t julia_flisp_func_info[] = {
     { "skip-ws", fl_skipws },
     { "accum-julia-symbol", fl_accum_julia_symbol },
@@ -429,6 +457,7 @@ static const builtinspec_t julia_flisp_func_info[] = {
     { NULL, NULL }
 };
 
+/* 初始化Julia的Flisp扩展：注册所有内置函数 */
 void fl_init_julia_extensions(fl_context_t *fl_ctx)
 {
     assign_global_builtins(fl_ctx, julia_flisp_func_info);

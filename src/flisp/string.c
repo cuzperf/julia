@@ -25,12 +25,14 @@
 extern "C" {
 #endif
 
+/* 判断给定值是否为字符串；返回 #t 或 #f */
 value_t fl_stringp(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "string?", nargs, 1);
     return fl_isstring(fl_ctx, args[0]) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* 统计字符串指定区间内的 UTF-8 字符数（支持 start/stop 参数） */
 value_t fl_string_count(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     size_t start = 0;
@@ -59,6 +61,7 @@ value_t fl_string_count(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 extern value_t fl_buffer(fl_context_t *fl_ctx, value_t *args, uint32_t nargs);
 extern value_t stream_to_string(fl_context_t *fl_ctx, value_t *ps);
 
+/* 将任意值转换为字符串表示，使用缓冲区拼接各参数的打印结果 */
 value_t fl_string(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs == 1 && fl_isstring(fl_ctx, args[0]))
@@ -81,6 +84,7 @@ value_t fl_string(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return outp;
 }
 
+/* 返回字符串的子串，从 i1 到 i2（字节索引，左闭右开） */
 value_t fl_string_sub(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs != 2)
@@ -107,6 +111,7 @@ value_t fl_string_sub(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return ns;
 }
 
+/* 返回字符串中指定字节索引处的 Unicode 字符（WChar） */
 value_t fl_string_char(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "string.char", nargs, 2);
@@ -121,6 +126,7 @@ value_t fl_string_char(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return mk_wchar(fl_ctx, u8_nextchar(s, &i));
 }
 
+/* 在内存区域中查找单字节字符，返回字节索引或 #f */
 static value_t mem_find_byte(fl_context_t *fl_ctx, char *s, char c, size_t start, size_t len)
 {
     char *p = (char*)memchr(s+start, c, len-start);
@@ -129,6 +135,7 @@ static value_t mem_find_byte(fl_context_t *fl_ctx, char *s, char c, size_t start
     return size_wrap(fl_ctx, (size_t)(p - s));
 }
 
+/* 在字符串中查找子串或字符，返回第一个匹配的字节索引或 #f */
 value_t fl_string_find(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     char cbuf[8];
@@ -179,6 +186,7 @@ value_t fl_string_find(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return fl_ctx->F;
 }
 
+/* 将字节索引向后移动 cnt 个 UTF-8 字符（向前遍历字符串） */
 value_t fl_string_inc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 2 || nargs > 3)
@@ -197,6 +205,7 @@ value_t fl_string_inc(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, i);
 }
 
+/* 将字节索引向前移动 cnt 个 UTF-8 字符（向后遍历字符串） */
 value_t fl_string_dec(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 2 || nargs > 3)
@@ -218,6 +227,7 @@ value_t fl_string_dec(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return size_wrap(fl_ctx, i);
 }
 
+/* 获取进制参数（2-36），无效时抛出错误 */
 static unsigned long get_radix_arg(fl_context_t *fl_ctx, value_t arg, char *fname)
 {
     unsigned long radix = (unsigned long)tosize(fl_ctx, arg, fname);
@@ -226,6 +236,7 @@ static unsigned long get_radix_arg(fl_context_t *fl_ctx, value_t arg, char *fnam
     return radix;
 }
 
+/* 将整数转换为指定进制的字符串表示 */
 value_t fl_numbertostring(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 1 || nargs > 2)
@@ -251,6 +262,7 @@ value_t fl_numbertostring(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return string_from_cstr(fl_ctx, str);
 }
 
+/* 将字符串按指定进制解析为整数，失败返回 #f */
 value_t fl_stringtonumber(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs < 1 || nargs > 2)
@@ -265,6 +277,7 @@ value_t fl_stringtonumber(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return n;
 }
 
+/* 检查字符串是否为有效的 UTF-8 编码 */
 value_t fl_string_isutf8(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "string.isutf8", nargs, 1);
@@ -273,6 +286,7 @@ value_t fl_string_isutf8(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return u8_isvalid(s, len) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* 字符串操作的内置函数注册表 */
 static const builtinspec_t stringfunc_info[] = {
     { "string", fl_string },
     { "string?", fl_stringp },
@@ -290,6 +304,7 @@ static const builtinspec_t stringfunc_info[] = {
     { NULL, NULL }
 };
 
+/* 初始化字符串相关的内置函数 */
 void stringfuncs_init(fl_context_t *fl_ctx)
 {
     assign_global_builtins(fl_ctx, stringfunc_info);

@@ -1,21 +1,30 @@
 #ifndef JL_OPCODES_H
 #define JL_OPCODES_H
 
+/* 操作码（opcodes）定义。
+ * Flisp 虚拟机字节码指令，用于在 Julia 编译器中执行 Lisp 操作。
+ * 包括流程控制、类型检查、算术运算、内存访问等操作。 */
 enum {
+    /* 栈操作与流程控制 */
     OP_NOP=0, OP_DUP, OP_POP, OP_CALL, OP_TCALL, OP_JMP, OP_BRF, OP_BRT,
     OP_JMPL, OP_BRFL, OP_BRTL, OP_RET,
 
+    /* 比较与类型检查操作 */
     OP_EQ, OP_EQV, OP_EQUAL, OP_ATOMP, OP_NOT, OP_NULLP, OP_BOOLEANP,
     OP_SYMBOLP, OP_NUMBERP, OP_BOUNDP, OP_PAIRP, OP_BUILTINP, OP_VECTORP,
     OP_FIXNUMP, OP_FUNCTIONP,
 
+    /* 对列表与函数应用操作 */
     OP_CONS, OP_LIST, OP_CAR, OP_CDR, OP_SETCAR, OP_SETCDR,
     OP_APPLY,
 
+    /* 算术运算 */
     OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_IDIV, OP_NUMEQ, OP_LT, OP_COMPARE,
 
+    /* 向量操作 */
     OP_VECTOR, OP_AREF, OP_ASET,
 
+    /* 加载与存储操作 */
     OP_LOADT, OP_LOADF, OP_LOADNIL, OP_LOAD0, OP_LOAD1, OP_LOADI8,
     OP_LOADV, OP_LOADVL,
     OP_LOADG, OP_LOADGL,
@@ -23,12 +32,14 @@ enum {
     OP_SETG, OP_SETGL,
     OP_SETA, OP_SETAL, OP_REMOVED_SETC, OP_REMOVED_SETCL,
 
+    /* 杂项操作（闭包、参数、异常处理、循环等） */
     OP_CLOSURE, OP_ARGC, OP_VARGC, OP_TRYCATCH, OP_FOR,
     OP_TAPPLY, OP_ADD2, OP_SUB2, OP_NEG, OP_LARGC, OP_LVARGC,
     OP_LOADA0, OP_LOADA1, OP_LOADC0, OP_LOADC1, OP_CALLL, OP_TCALLL,
     OP_BRNE, OP_BRNEL, OP_CADR, OP_BRNN, OP_BRNNL, OP_BRN, OP_BRNL,
     OP_OPTARGS, OP_BRBOUND, OP_KEYARGS, OP_BOX, OP_BOXL, OP_SHIFT,
 
+    /* 特殊常量 */
     OP_BOOL_CONST_T, OP_BOOL_CONST_F, OP_THE_EMPTY_LIST, OP_EOF_OBJECT,
 
     N_OPCODES

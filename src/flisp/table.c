@@ -11,6 +11,11 @@
 extern "C" {
 #endif
 
+/*==================================================================
+ * 哈希表（Table）操作
+ *==================================================================*/
+
+/* 打印哈希表内容，格式为 #table(key value ...) */
 void print_htable(fl_context_t *fl_ctx, value_t v, ios_t *f)
 {
     htable_t *h = (htable_t*)cv_data((cvalue_t*)ptr(v));
@@ -29,6 +34,7 @@ void print_htable(fl_context_t *fl_ctx, value_t v, ios_t *f)
     fl_print_chr(fl_ctx, ')', f);
 }
 
+/* 递归遍历哈希表（用于 GC 标记） */
 void print_traverse_htable(fl_context_t *fl_ctx, value_t self)
 {
     htable_t *h = (htable_t*)cv_data((cvalue_t*)ptr(self));
@@ -41,6 +47,7 @@ void print_traverse_htable(fl_context_t *fl_ctx, value_t self)
     }
 }
 
+/* 释放哈希表占用的内存 */
 void free_htable(fl_context_t *fl_ctx, value_t self)
 {
     (void)fl_ctx;
@@ -48,6 +55,7 @@ void free_htable(fl_context_t *fl_ctx, value_t self)
     htable_free(h);
 }
 
+/* 移动后修正哈希表中的指针引用（GC 搬迁处理） */
 void relocate_htable(fl_context_t *fl_ctx, value_t oldv, value_t newv)
 {
     htable_t *oldh = (htable_t*)cv_data((cvalue_t*)ptr(oldv));
@@ -61,17 +69,20 @@ void relocate_htable(fl_context_t *fl_ctx, value_t oldv, value_t newv)
     }
 }
 
+/* 判断值是否为哈希表类型 */
 static int ishashtable(fl_context_t *fl_ctx, value_t v)
 {
     return iscvalue(v) && cv_class((cvalue_t*)ptr(v)) == fl_ctx->tabletype;
 }
 
+/* (table? value) — 返回 #t 如果 value 是哈希表 */
 value_t fl_tablep(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "table?", nargs, 1);
     return ishashtable(fl_ctx, args[0]) ? fl_ctx->T : fl_ctx->F;
 }
 
+/* 将值强制转换为哈希表指针，失败时抛出类型错误 */
 static htable_t *totable(fl_context_t *fl_ctx, value_t v, char *fname)
 {
     if (!ishashtable(fl_ctx, v))
@@ -79,6 +90,7 @@ static htable_t *totable(fl_context_t *fl_ctx, value_t v, char *fname)
     return (htable_t*)cv_data((cvalue_t*)ptr(v));
 }
 
+/* 创建哈希表，接受 key/value 成对参数 */
 value_t fl_table(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     size_t cnt = (size_t)nargs;
@@ -112,6 +124,7 @@ value_t fl_table(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 }
 
 // (put! table key value)
+/* (put! table key value) — 向哈希表中插入键值对 */
 value_t fl_table_put(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "put!", nargs, 3);
@@ -127,12 +140,14 @@ value_t fl_table_put(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return args[0];
 }
 
+/* 抛出键未找到的错误 */
 static void key_error(fl_context_t *fl_ctx, char *fname, value_t key)
 {
     lerrorf(fl_ctx, fl_list2(fl_ctx, fl_ctx->KeyError, key), "%s: key not found", fname);
 }
 
 // (get table key [default])
+/* (get table key [default]) — 从哈希表中获取键对应的值，可选默认值 */
 value_t fl_table_get(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     if (nargs != 3)
@@ -148,6 +163,7 @@ value_t fl_table_get(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 }
 
 // (has? table key)
+/* (has? table key) — 检查哈希表中是否存在指定键 */
 value_t fl_table_has(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "has", nargs, 2);
@@ -156,6 +172,7 @@ value_t fl_table_has(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 }
 
 // (del! table key)
+/* (del! table key) — 从哈希表中删除指定键 */
 value_t fl_table_del(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "del!", nargs, 2);
@@ -165,6 +182,7 @@ value_t fl_table_del(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return args[0];
 }
 
+/* (table.foldl func zero table) — 对哈希表所有键值对做左折叠 */
 value_t fl_table_foldl(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
 {
     argcount(fl_ctx, "table.foldl", nargs, 3);
@@ -192,6 +210,7 @@ value_t fl_table_foldl(fl_context_t *fl_ctx, value_t *args, uint32_t nargs)
     return zero;
 }
 
+/* 哈希表操作的内置函数注册表 */
 static const builtinspec_t tablefunc_info[] = {
     { "table", fl_table },
     { "table?", fl_tablep },
@@ -203,6 +222,7 @@ static const builtinspec_t tablefunc_info[] = {
     { NULL, NULL }
 };
 
+/* 初始化哈希表类型及其内置函数 */
 void table_init(fl_context_t *fl_ctx)
 {
     fl_ctx->table_vtable.print = print_htable;

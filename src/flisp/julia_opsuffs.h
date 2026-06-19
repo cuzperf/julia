@@ -1,13 +1,25 @@
-/* Array of codepoints allowed as operator suffixes in Julia:
+/* 运算符后缀字符表。
+ * 定义了 Julia 中允许用作运算符后缀的 Unicode 码点集合，
+ * 包括上标/下标数字、上标/下标运算符、修饰字母、
+ * 拉丁/希腊上标字母、以及素数符号等。
+ *
+ * 该表由以下 Julia 代码生成：
+ *
+ *   for c in sort(unique(collect("₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎²³¹ʰʲʳʷʸˡˢˣ˱˲ᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁᵂᵃᵅᵇᵈᵉᵋᵍᵏᵐᵒᵖᵗᵘᵛᵝᵞᵟᵠᵡᶲᵢᵣᵤᵥᵦᵧᵨᵩᵪᶜᶠᶥᶦᶫᶰᶸᶻᶿ⁰ⁱ⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿₐₑₒₓₔₕₖₗₘₙₚₛₜⱼⱽꜛꜜꜝ" * "′″‴‵‶‷⁗")))
+ *       println("   ", repr(UInt32(c)), ", // ", c)
+ *     end
+ *
+ * Array of codepoints allowed as operator suffixes in Julia:
    primes and Latin/Greek/math super/subscripts.
 
    produced by:
 
    for c in sort(unique(collect("₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎²³¹ʰʲʳʷʸˡˢˣ˱˲ᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁᵂᵃᵅᵇᵈᵉᵋᵍᵏᵐᵒᵖᵗᵘᵛᵝᵞᵟᵠᵡᶲᵢᵣᵤᵥᵦᵧᵨᵩᵪᶜᶠᶥᶦᶫᶰᶸᶻᶿ⁰ⁱ⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿₐₑₒₓₔₕₖₗₘₙₚₛₜⱼⱽꜛꜜꜝ" * "′″‴‵‶‷⁗")))
        println("   ", repr(UInt32(c)), ", // ", c)
-   end
+    end
 */
 
+/* 按升序排列的运算符后缀 Unicode 码点表 */
 static const uint32_t opsuffs[] = {
    0x000000b2, // ²
    0x000000b3, // ³
