@@ -82,7 +82,7 @@ GC_CODEGEN_SRCS += llvm-final-gc-lowering-mmtk
 else
 GC_CODEGEN_SRCS += llvm-final-gc-lowering-stock
 endif
-CODEGEN_SRCS := codegen jitlayers aotcompile debuginfo disasm llvm-simdloop \
+CODEGEN_SRCS := jitlayers aotcompile codegen debuginfo disasm llvm-simdloop \
 	llvm-pass-helpers llvm-ptls llvm-propagate-addrspaces \
 	llvm-multiversioning llvm-alloc-opt llvm-alloc-helpers cgmemmgr llvm-remove-addrspaces \
 	llvm-remove-ni llvm-julia-licm llvm-demote-float16 llvm-cpufeatures llvm-expand-atomic-modify \
