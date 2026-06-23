@@ -83,22 +83,15 @@ static const short builtin_arg_counts[] =
       ANYARGS, -1, ANYARGS, -1, 2,  2, 2, 2,
       ANYARGS, 2, 3 };
 
-#define PUSH(fl_ctx, v)                                         \
-    do {                                                        \
-        (fl_ctx->Stack[fl_ctx->SP++] = (v));                    \
-        fl_print(fl_ctx, ios_stderr, v);                        \
-        ios_printf(ios_stderr, "\nSP = %d\n\n", fl_ctx->SP);    \
-    } while(0)
-
-#define POP(fl_ctx) (fl_print(fl_ctx, ios_stderr, fl_ctx->Stack[fl_ctx->SP - 1]), ios_printf(ios_stderr, "\nSP = %d\n\n", fl_ctx->SP), fl_ctx->Stack[--fl_ctx->SP])
-
-#define POPN(fl_ctx, n)                                                 \
-    for (int i = 1; i <= n; ++i) {                                      \
-        fl_print(fl_ctx, ios_stderr, fl_ctx->Stack[fl_ctx->SP - i]);    \
-        ios_printf(ios_stderr, "\n");                                   \
-    }                                                                   \
-    ios_printf(ios_stderr, "\nSP = %d\n\n", fl_ctx->SP);                \
-    (fl_ctx->SP-=(n))
+#ifdef NDEBUG
+#define PUSH(fl_ctx, v) (fl_ctx->Stack[fl_ctx->SP++] = (v))
+#define POP(fl_ctx)     (fl_ctx->Stack[--fl_ctx->SP])
+#define POPN(fl_ctx, n) (fl_ctx->SP-=(n))
+#else
+#define PUSH(fl_ctx, v) (ios_printf(ios_stderr, "PUSH: SP = %d\n", fl_ctx->SP), fl_ctx->Stack[fl_ctx->SP++] = (v))
+#define POP(fl_ctx)     (ios_printf(ios_stderr, "POP: SP = %d\n\n", fl_ctx->SP), fl_ctx->Stack[--fl_ctx->SP])
+#define POPN(fl_ctx, n) (ios_printf(ios_stderr, "POPN(%d): SP = %d\n\n", n, fl_ctx->SP), fl_ctx->SP-=(n))
+#endif
 
 static value_t apply_cl(fl_context_t *fl_ctx, uint32_t nargs);
 /* 分配 n 个 word 的原始存储（前向声明） */
