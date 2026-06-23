@@ -21,29 +21,35 @@
 #include <llvm-c/Orc.h>
 #include <llvm-version.h>
 
+/* 字符串化宏：将参数转换为字符串字面量 */
 #define STR(x) #x
+/* 先展开参数再字符串化 */
 #define XSTR(x) STR(x)
 
 #if !defined(_WIN32)
 #include <unistd.h>
 #else
+/* Windows 兼容：将 sleep 映射到 Sleep（毫秒） */
 #define sleep(x) Sleep(1000*x)
 #endif
 #if defined(_CPU_ARM_)
 #include <sys/time.h>
 #endif
 
-// pragma visibility is more useful than -fvisibility
+/* 将所有符号隐藏，仅在显式标记处导出，比 -fvisibility 更细粒度 */
 #pragma GCC visibility push(hidden)
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* ======= ASAN (AddressSanitizer) 支持代码 ======= */
 #ifdef _COMPILER_ASAN_ENABLED_
 #if defined(__GLIBC__) && defined(_CPU_X86_64_)
 /* TODO: This is terrible - we're reaching deep into glibc internals here.
    We should probably just switch to our own setjmp/longjmp implementation. */
+/* jmp_buf 中 RSP 寄存器的索引（glibc x86_64 内部布局） */
 #define JB_RSP 6
+/* 解码 glibc 指针混淆后的 jmp_buf 内容 */
 static inline uintptr_t demangle_ptr(uintptr_t var)
 {
     asm ("ror $17, %0\n\t"
@@ -52,6 +58,7 @@ static inline uintptr_t demangle_ptr(uintptr_t var)
         : "0" (var));
     return var;
 }
+/* 从 jmp_buf 中提取堆栈指针（用于 ASAN 栈取消毒） */
 static inline uintptr_t jmpbuf_sp(jl_jmp_buf *buf)
 {
     return demangle_ptr((uintptr_t)(*buf)[0].__jmpbuf[JB_RSP]);
@@ -59,9 +66,12 @@ static inline uintptr_t jmpbuf_sp(jl_jmp_buf *buf)
 #else
 #error Need to implement jmpbuf_sp for this architecture
 #endif
+/* sanitizer 纤程切换函数声明 */
 JL_DLLIMPORT void __sanitizer_start_switch_fiber(void**, const void*, size_t);
 JL_DLLIMPORT void __sanitizer_finish_switch_fiber(void*, const void**, size_t*);
+/* ASAN 栈内存取消毒函数 */
 JL_DLLIMPORT void __asan_unpoison_stack_memory(uintptr_t addr, size_t size);
+/* 取消毒任务栈：在任务切换时清除跳过的栈帧的毒标记 */
 static inline void asan_unpoison_task_stack(jl_task_t *ct, jl_jmp_buf *buf)
 {
     if (!ct)
@@ -81,7 +91,9 @@ static inline void asan_unpoison_stack_memory(uintptr_t addr, size_t size) {
 static inline void asan_unpoison_task_stack(jl_task_t *ct, jl_jmp_buf *buf) JL_NOTSAFEPOINT {}
 static inline void asan_unpoison_stack_memory(uintptr_t addr, size_t size) JL_NOTSAFEPOINT {}
 #endif
+/* ======= MSAN (MemorySanitizer) 支持代码 ======= */
 #ifdef _COMPILER_MSAN_ENABLED_
+/* MSAN 运行时声明：取消毒内存、标记已分配内存、取消毒字符串 */
 JL_DLLIMPORT void __msan_unpoison(const volatile void *a, size_t size) JL_NOTSAFEPOINT;
 JL_DLLIMPORT void __msan_allocated_memory(const volatile void *a, size_t size) JL_NOTSAFEPOINT;
 JL_DLLIMPORT void __msan_unpoison_string(const volatile char *a) JL_NOTSAFEPOINT;
@@ -100,6 +112,7 @@ static inline void msan_allocated_memory(const volatile void *a, size_t size) JL
 static inline void msan_unpoison_string(const volatile char *a) JL_NOTSAFEPOINT {}
 #endif
 
+/* MAX_ALIGN：当前平台的最大对齐字节数，根据 CPU 架构和 LLVM 版本确定 */
 #ifndef _OS_WINDOWS_
     #if defined(_CPU_ARM_) || defined(_CPU_PPC_) || defined(_CPU_WASM_)
         #define MAX_ALIGN 8
@@ -120,6 +133,7 @@ static inline void msan_unpoison_string(const volatile char *a) JL_NOTSAFEPOINT 
     #endif
 #endif
 
+/* alignof：兼容不同编译器的对齐查询宏（C11 _Alignof 或保守回退） */
 #ifndef alignof
 #  ifndef __cplusplus
 #    ifdef __GNUC__
@@ -130,6 +144,8 @@ static inline void msan_unpoison_string(const volatile char *a) JL_NOTSAFEPOINT 
 #  endif
 #endif
 
+/* ======= IFUNC (间接函数) 支持 ======= */
+/* IFUNC 允许运行时动态选择函数实现（如 memcpy 的最佳实现） */
 #if defined(__GLIBC__) && defined(JULIA_HAS_IFUNC_SUPPORT)
 // Make sure both the compiler and the glibc supports it.
 // Only enable this on known working glibc versions.
@@ -146,6 +162,7 @@ static inline void msan_unpoison_string(const volatile char *a) JL_NOTSAFEPOINT 
 #  define JL_USE_IFUNC 0
 #endif
 
+/* CFI_NORETURN：标记永不返回的函数，破坏栈展开信息避免误展开 */
 // If we've smashed the stack, (and not just normal NORETURN)
 // this will smash stack-unwind too
 #ifdef _OS_WINDOWS_
@@ -176,6 +193,8 @@ static inline void msan_unpoison_string(const volatile char *a) JL_NOTSAFEPOINT 
 #endif
 #endif
 
+/* ======= 栈溢出保护 (SSP) ======= */
+/* __stack_chk_guard：栈保护金丝雀值，检测栈溢出 */
 #if defined(HAVE_SSP) && (defined(_OS_DARWIN_) || defined(_OS_FREEBSD_))
 // This is provided by libSystem on Darwin and libc on FreeBSD, and imported
 extern JL_DLLIMPORT uintptr_t __stack_chk_guard;
@@ -187,6 +206,7 @@ extern uintptr_t __stack_chk_guard;
 extern JL_DLLEXPORT uintptr_t __stack_chk_guard;
 #endif
 
+/* jl_unreachable：标记不可达代码路径（release 用 __builtin_unreachable，debug 用 assert） */
 #ifdef JL_NDEBUG
 # if jl_has_builtin(__builtin_unreachable) || defined(_COMPILER_GCC_) || defined(_COMPILER_INTEL_)
 #   define jl_unreachable() __builtin_unreachable()
@@ -197,14 +217,15 @@ extern JL_DLLEXPORT uintptr_t __stack_chk_guard;
 # define jl_unreachable() assert(0 && "unreachable")
 #endif
 
-// If this is detected in a backtrace of segfault, it means the functions
-// that use this value must be reworked into their async form with cb arg
-// provided and with JL_UV_LOCK used around the calls
+/* unused_uv_loop_arg：标记未正确使用 UV 锁的哨兵值（0xBAD10），
+   若在 segfault 回溯中出现，表示需要改用异步回调形式 */
 static uv_loop_t *const unused_uv_loop_arg = (uv_loop_t *)0xBAD10;
 
+/* UV (libuv) 事件循环的互斥锁及等待线程计数 */
 extern jl_mutex_t jl_uv_mutex;
 extern _Atomic(int) jl_uv_n_waiters;
 
+/* ======= 内部全局数据 ======= */
 // Global data structures for accessing symbols and other globals
 #include "jl_internal_data.inc"
 
@@ -213,7 +234,7 @@ extern _Atomic(int) jl_uv_n_waiters;
 JL_INTERNAL_DATA(XX)
 #undef XX
 #else
-// Struct definition for internal data access
+/* jl_internal_global：内部全局变量的结构体聚合，用于集中访问符号和全局对象 */
 struct jl_internal_global {
 #define XX(name, type) type name JL_GLOBALLY_ROOTED;
 JL_INTERNAL_DATA(XX)
@@ -226,19 +247,26 @@ extern JL_HIDDEN struct jl_internal_global internal_global;
 #define jl_method_table (internal_global.method_table)
 #endif
 
-// Generated macros to access globals
+/* ======= UV 锁与线程相关全局变量 ======= */
+/* JL_UV_LOCK/JL_UV_UNLOCK：UV 事件循环操作的锁 */
 void JL_UV_LOCK(void);
 #define JL_UV_UNLOCK() JL_UNLOCK(&jl_uv_mutex)
+/* 是否处于多线程区域的标志 */
 extern _Atomic(unsigned) _threadedregion;
+/* IO 事件循环所在线程 ID */
 extern _Atomic(uint16_t) io_loop_tid;
 
+/* ======= 初始化与运行时检测 ======= */
+/* jl_init_：Julia 运行时初始化（传入系统映像） */
 JL_DLLEXPORT void jl_init_(jl_image_buf_t sysimage);
+/* 进入/退出多线程区域 */
 JL_DLLEXPORT void jl_enter_threaded_region(void);
 JL_DLLEXPORT void jl_exit_threaded_region(void);
+/* 检测是否在 rr 调试器或 sanitizer 下运行 */
 int jl_running_under_rr(int recheck) JL_NOTSAFEPOINT;
 int jl_running_under_sanitizer(int recheck) JL_NOTSAFEPOINT;
 
-//--------------------------------------------------
+/* ======= 定时器与性能分析 ======= */
 // timers
 // Returns time in nanosec
 JL_DLLEXPORT uint64_t jl_hrtime(void) JL_NOTSAFEPOINT;
@@ -252,7 +280,9 @@ JL_DLLEXPORT void jl_unlock_profile(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEAVE;
 JL_DLLEXPORT int jl_lock_profile_wr(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_ENTER;
 JL_DLLEXPORT void jl_unlock_profile_wr(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEAVE;
 
+/* 获取所有任务的 arraylist（for 性能分析器） */
 arraylist_t *jl_get_all_tasks_arraylist(void) JL_NOTSAFEPOINT;
+/* jl_record_backtrace_result_t：记录线程回溯的结果，包含回溯大小和线程 ID */
 typedef struct {
     size_t bt_size;
     int tid;
@@ -261,6 +291,7 @@ JL_DLLEXPORT JL_DLLEXPORT size_t jl_try_record_thread_backtrace(jl_ptls_t ptls2,
                                                                 size_t max_bt_size) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_record_backtrace_result_t jl_record_backtrace(jl_task_t *t, struct _jl_bt_element_t *bt_data,
                                                               size_t max_bt_size, int all_tasks_profiler) JL_NOTSAFEPOINT;
+/* 性能分析全局缓冲区 */
 extern volatile struct _jl_bt_element_t *profile_bt_data_prof;
 extern volatile size_t profile_bt_size_max;
 extern volatile size_t profile_bt_size_cur;
@@ -278,15 +309,17 @@ extern uv_mutex_t live_tasks_lock;
 // - We write to the profile in a profiler thread while the compute thread is reading it.
 // Locking discipline: `bt_data_prof_lock` must be held inside the scope of `live_tasks_lock`.
 extern uv_mutex_t bt_data_prof_lock;
+/* 性能分析状态常量 */
 #define PROFILE_STATE_THREAD_NOT_SLEEPING (1)
 #define PROFILE_STATE_THREAD_SLEEPING (2)
 #define PROFILE_STATE_WALL_TIME_PROFILING (3)
+/* 执行任务性能分析采样 */
 void jl_profile_task(void);
 #if defined(_OS_WINDOWS_) && defined(_CPU_X86_64_)
 JL_DLLEXPORT void jl_set_profile_abort_ptr(_Atomic(int) *abort_ptr) JL_NOTSAFEPOINT;
 #endif
 
-// number of cycles since power-on
+/* cycleclock：获取自开机以来的 CPU 周期计数（用于精确计时） */
 static inline uint64_t cycleclock(void) JL_NOTSAFEPOINT
 {
 #if defined(_CPU_X86_64_)
@@ -354,19 +387,24 @@ static inline uint64_t cycleclock(void) JL_NOTSAFEPOINT
 
 #include "timing.h"
 
+/* 类型推断计时：记录每次推断的开始/结束时间 */
 JL_DLLEXPORT uint64_t jl_typeinf_timing_begin(void) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_typeinf_timing_end(uint64_t start, int is_recompile) JL_NOTSAFEPOINT;
 
 // Global *atomic* integers controlling *process-wide* measurement of compilation time.
+/* 全进程范围的编译时间度量原子变量 */
 extern JL_DLLEXPORT _Atomic(uint8_t) jl_measure_compile_time_enabled;
 extern JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_compile_time;
 extern JL_DLLEXPORT _Atomic(uint64_t) jl_cumulative_recompile_time;
 
 // Global *atomic* integer controlling *process-wide* task timing.
+/* 全进程范围的任务时间度量开关 */
 extern JL_DLLEXPORT _Atomic(uint8_t) jl_task_metrics_enabled;
 
+/* jl_return_address：获取当前函数的返回地址（调用者 PC） */
 #define jl_return_address() ((uintptr_t)__builtin_return_address(0))
 
+/* jl_int32hash_fast：快速 32 位哈希（目前直接返回输入，性能足够） */
 STATIC_INLINE uint32_t jl_int32hash_fast(uint32_t a)
 {
 //    a = (a+0x7ed55d16) + (a<<12);
@@ -379,9 +417,8 @@ STATIC_INLINE uint32_t jl_int32hash_fast(uint32_t a)
 }
 
 
-// this is a version of memcpy that preserves atomic memory ordering
-// which makes it safe to use for objects that can contain memory references
-// without risk of creating pointers out of thin air
+/* memmove_refs：保持原子内存序的 memmove，安全复制可能含内存引用的对象，
+   避免创建"凭空指针" */
 // TODO: replace with LLVM's llvm.memmove.element.unordered.atomic.p0i8.p0i8.i32
 //       aka `__llvm_memmove_element_unordered_atomic_8` (for 64 bit)
 static inline void memmove_refs(_Atomic(void*) *dstp, _Atomic(void*) *srcp, size_t n) JL_NOTSAFEPOINT
@@ -399,6 +436,7 @@ static inline void memmove_refs(_Atomic(void*) *dstp, _Atomic(void*) *srcp, size
     }
 }
 
+/* memassign_safe：安全的内存赋值，根据是否含指针选择 memmove_refs 或普通 memcpy */
 static inline void memassign_safe(int hasptr, char *dst, const jl_value_t *src, size_t nb) JL_NOTSAFEPOINT
 {
     assert(nb == jl_datatype_size(jl_typeof(src)));
@@ -418,17 +456,19 @@ static inline void memassign_safe(int hasptr, char *dst, const jl_value_t *src, 
     memcpy(dst, jl_assume_aligned(src, sizeof(void*)), nb);
 }
 
-// -- GC -- //
+/* ======= 垃圾回收 (GC) ======= */
 
-#define GC_CLEAN  0 // freshly allocated
-#define GC_MARKED 1 // reachable and young
-#define GC_OLD    2 // if it is reachable it will be marked as old
-#define GC_IN_IMAGE 4
-#define GC_IN_IMAGE_REMSET 8
+/* GC 颜色标记常量 */
+#define GC_CLEAN  0 // freshly allocated    // 新分配
+#define GC_MARKED 1 // reachable and young  // 可达且年轻
+#define GC_OLD    2 // if it is reachable it will be marked as old  // 老年代
+#define GC_IN_IMAGE 4           // 系统映像中预分配
+#define GC_IN_IMAGE_REMSET 8    // 系统映像中且在写屏障记录集中
 
-#define GC_OLD_MARKED (GC_OLD | GC_MARKED) // reachable and old
-#define GC_IN_IMAGE_NOT_REMSET (GC_IN_IMAGE) // permalloc'd and not yet modified
+#define GC_OLD_MARKED (GC_OLD | GC_MARKED)       // 可达且年老
+#define GC_IN_IMAGE_NOT_REMSET (GC_IN_IMAGE)     // 已预分配且未被修改
 
+/* ======= 运行时代码生成 ABI 类型 ======= */
 // data structures for runtime codegen
 typedef struct _jl_abi_t {
     jl_value_t *sigt;
@@ -439,16 +479,19 @@ typedef struct _jl_abi_t {
     int is_opaque_closure;
 } jl_abi_t;
 
+/* jl_invoke_api_t：调用约定枚举，标识函数调用时的参数传递方式 */
 // The compiler uses the specific integer values returned by jl_invoke_api
 typedef enum {
-    JL_INVOKE_ARGS        = 1,  // jl_fptr_args
-    JL_INVOKE_CONST       = 2,  // jl_fptr_const
-    JL_INVOKE_SPARAM      = 3,  // jl_fptr_sparam
-    JL_INVOKE_INTERPRETED = 4,  // jl_fptr_interpret_call
-    JL_INVOKE_SPECSIG     = 5,  // jfptr_* wrapper
+    JL_INVOKE_ARGS        = 1,  // jl_fptr_args          // 标准参数列表
+    JL_INVOKE_CONST       = 2,  // jl_fptr_const         // 常量折叠结果
+    JL_INVOKE_SPARAM      = 3,  // jl_fptr_sparam        // 静态参数
+    JL_INVOKE_INTERPRETED = 4,  // jl_fptr_interpret_call// 解释执行
+    JL_INVOKE_SPECSIG     = 5,  // jfptr_* wrapper       // 专用签名包装
 } jl_invoke_api_t;
 
+/* ======= 符号前缀定义（用于代码生成中的命名） ======= */
 // The symbol prefix for invoke -> specsig wrappers
+/* invoke -> specsig 包装器的符号前缀 */
 #define JL_SYM_INVOKE_SPECSIG     "jfptr_"
 #define JL_SYM_INVOKE_IMG_SPECSIG "jsysw_"
 
@@ -474,6 +517,7 @@ typedef enum {
 // Symbol prefix for the PLT thunk for a CodeInstance
 #define JL_SYM_JLPLT "jlpkg_"
 
+/* jl_symbol_prefix_t：符号前缀类型枚举，标识不同种类的生成符号 */
 typedef enum {
     JL_SYMBOL_INVOKE_DEF,
     JL_SYMBOL_INVOKE_IMG,
@@ -482,11 +526,13 @@ typedef enum {
     JL_SYMBOL_SPECPTR_IMG,
 } jl_symbol_prefix_t;
 
+/* 判断调用类型是否为原生调用（非解释器/非常量） */
 static inline int jl_jlcall_specptr_is_native(jl_invoke_api_t type)
 {
     return type == JL_INVOKE_ARGS || type == JL_INVOKE_SPARAM || type == JL_INVOKE_SPECSIG;
 }
 
+/* 从函数指针反推调用 API 类型 */
 static inline jl_invoke_api_t jl_callptr_invoke_api(jl_callptr_t ptr) JL_NOTSAFEPOINT
 {
     if (ptr == jl_fptr_args_addr)
@@ -500,6 +546,7 @@ static inline jl_invoke_api_t jl_callptr_invoke_api(jl_callptr_t ptr) JL_NOTSAFE
     return JL_INVOKE_SPECSIG;
 }
 
+/* 从调用 API 类型获取对应的标准函数指针 */
 static inline jl_callptr_t jl_invoke_api_callptr(jl_invoke_api_t type) JL_NOTSAFEPOINT
 {
     switch (type) {
@@ -512,36 +559,54 @@ static inline jl_callptr_t jl_invoke_api_callptr(jl_invoke_api_t type) JL_NOTSAF
     }
 }
 
+/* ======= 全局常量与计数器 ======= */
 // useful constants
+/* 世界计数器：跟踪方法定义和重定义的版本号 */
 extern JL_DLLEXPORT _Atomic(size_t) jl_world_counter;
 
+/* ======= 方法跟踪与调试 ======= */
+/* 新方法跟踪器回调类型 */
 typedef void (*tracer_cb)(jl_value_t *tracee);
 extern tracer_cb jl_newmeth_tracer;
 void jl_call_tracer(tracer_cb callback, jl_value_t *tracee);
 void print_func_loc(JL_STREAM *s, jl_method_t *m);
+/* 方法失效调试信息 */
 extern jl_array_t *_jl_debug_method_invalidation JL_GLOBALLY_ROOTED;
 
+/* 页大小与大页大小 */
 extern JL_DLLEXPORT size_t jl_page_size;
 extern JL_DLLEXPORT size_t jl_hugepage_size;
+/* 类型推断和编译相关函数 */
 extern JL_DLLEXPORT jl_value_t *jl_typeinf_func JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_value_t *jl_compile_and_emit_func JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT size_t jl_typeinf_world;
+/* dlopen 函数引用 */
 extern JL_DLLEXPORT jl_value_t *jl_libdl_dlopen_func JL_GLOBALLY_ROOTED;
+/* 调用缓存 */
 extern _Atomic(jl_typemap_entry_t*) call_cache[N_CALL_CACHE] JL_GLOBALLY_ROOTED;
 
+/* 释放任务栈缓冲区 */
 void free_stack(void *stkbuf, size_t bufsz) JL_NOTSAFEPOINT;
 
+/* 当前行号和文件名（原子访问） */
 JL_DLLEXPORT extern _Atomic(int) jl_lineno;
 JL_DLLEXPORT extern _Atomic(const char *) jl_filename;
 
+/* ======= GC 分配函数 ======= */
+/* 小对象分配（非内联版本） */
 jl_value_t *jl_gc_small_alloc_noinline(jl_ptls_t ptls, int offset,
                                    int osize);
+/* 大对象分配（非内联版本） */
 jl_value_t *jl_gc_big_alloc_noinline(jl_ptls_t ptls, size_t allocsz);
+/* 将大小分类到对应的 GC 池中 */
 JL_DLLEXPORT int jl_gc_classify_pools(size_t sz, int *osize) JL_NOTSAFEPOINT;
+/* 系统映像写屏障记录集 */
 extern arraylist_t image_remset;
 extern jl_mutex_t image_remset_lock;
 
+/* ======= GC 大小类别表 ======= */
 // pools are 16376 bytes large (GC_POOL_SZ - GC_PAGE_OFFSET)
+/* jl_gc_sizeclasses：GC 内存池的大小类别数组，每个条目对应一个池的块大小 */
 static const int jl_gc_sizeclasses[] = {
 #ifdef _P64
     8,
@@ -585,6 +650,7 @@ static const int jl_gc_sizeclasses[] = {
 //   64, 32, 160, 64, 16, 64, 112,  128, bytes lost
 #endif
 };
+/* JL_GC_N_POOLS：GC 池的数量，因平台和对齐需求而异 */
 #ifdef GC_SMALL_PAGE
 #ifdef _P64
 #  define JL_GC_N_POOLS 39
@@ -604,6 +670,7 @@ static const int jl_gc_sizeclasses[] = {
 #endif
 static_assert(sizeof(jl_gc_sizeclasses) / sizeof(jl_gc_sizeclasses[0]) == JL_GC_N_POOLS, "");
 
+/* jl_gc_alignment：根据分配大小返回所需的对齐字节数 */
 STATIC_INLINE int jl_gc_alignment(size_t sz) JL_NOTSAFEPOINT
 {
     if (sz == 0)
@@ -624,8 +691,10 @@ STATIC_INLINE int jl_gc_alignment(size_t sz) JL_NOTSAFEPOINT
     return 16;
 #endif
 }
+/* 通用对齐查询（暴露给外部） */
 JL_DLLEXPORT int jl_alignment(size_t sz) JL_NOTSAFEPOINT;
 
+/* szclass_table：将大小（按 16 对齐）映射到 GC 池索引的查找表 */
 // the following table is computed as:
 // [searchsortedfirst(jl_gc_sizeclasses, i) - 1 for i = 0:16:jl_gc_sizeclasses[end]]
 static const uint8_t szclass_table[] =
@@ -636,6 +705,7 @@ static const uint8_t szclass_table[] =
 #endif
 static_assert(sizeof(szclass_table) == 128, "");
 
+/* jl_gc_szclass：根据分配大小返回对应的 GC 大小类别索引 */
 STATIC_INLINE uint8_t JL_CONST_FUNC jl_gc_szclass(unsigned sz) JL_NOTSAFEPOINT
 {
     assert(sz <= 2032);
@@ -656,6 +726,7 @@ STATIC_INLINE uint8_t JL_CONST_FUNC jl_gc_szclass(unsigned sz) JL_NOTSAFEPOINT
     return klass + N;
 }
 
+/* jl_gc_szclass_align8：8 字节对齐版本的大小类别查询（用于字符串分配） */
 STATIC_INLINE uint8_t JL_CONST_FUNC jl_gc_szclass_align8(unsigned sz) JL_NOTSAFEPOINT
 {
     if (sz >= 16 && sz <= 152) {
@@ -671,12 +742,14 @@ STATIC_INLINE uint8_t JL_CONST_FUNC jl_gc_szclass_align8(unsigned sz) JL_NOTSAFE
     return jl_gc_szclass(sz);
 }
 
+/* 对齐常量定义 */
 #define JL_SMALL_BYTE_ALIGNMENT 16
 // JL_HEAP_ALIGNMENT is the maximum alignment that the GC can provide
-#define JL_HEAP_ALIGNMENT JL_SMALL_BYTE_ALIGNMENT
-#define GC_MAX_SZCLASS (2032-sizeof(void*))
+#define JL_HEAP_ALIGNMENT JL_SMALL_BYTE_ALIGNMENT  /* GC 可保证的最大对齐 */
+#define GC_MAX_SZCLASS (2032-sizeof(void*))         /* 池分配的最大大小 */
 static_assert(ARRAY_CACHE_ALIGN_THRESHOLD > GC_MAX_SZCLASS, "");
 
+/* jl_gc_alloc：GC 分配主入口，分配 sz 字节并设置类型标签为 ty */
 /* Programming style note: When using jl_gc_alloc, do not JL_GC_PUSH it into a
  * gc frame, until it has been fully initialized. An uninitialized value in a
  * gc frame can crash upon encountering the first safepoint. By delaying use of
@@ -684,6 +757,7 @@ static_assert(ARRAY_CACHE_ALIGN_THRESHOLD > GC_MAX_SZCLASS, "");
  * safepoints will be caught by the GC analyzer.
  */
 JL_DLLEXPORT jl_value_t *jl_gc_alloc(jl_ptls_t ptls, size_t sz, void *ty);
+/* jl_gc_alloc 内联宏：当 sz 为编译时常量时使用内联版本 */
 // On GCC, only inline when sz is constant
 #ifdef __GNUC__
 #  define jl_gc_alloc(ptls, sz, ty)  \
@@ -694,25 +768,33 @@ JL_DLLEXPORT jl_value_t *jl_gc_alloc(jl_ptls_t ptls, size_t sz, void *ty);
 #  define jl_gc_alloc(ptls, sz, ty) jl_gc_alloc_(ptls, sz, ty)
 #endif
 
+/* jl_buff_tag：缓冲区类型标记，为 uint64_t[3] 以确保正确的对齐 */
 // jl_buff_tag must be an actual pointer here, so it cannot be confused for an actual type reference.
 // defined as uint64_t[3] so that we can get the right alignment of this and a "type tag" on it
 const extern uint64_t _jl_buff_tag[3];
 #define jl_buff_tag ((uintptr_t)LLT_ALIGN((uintptr_t)&_jl_buff_tag[1],16))
 JL_DLLEXPORT uintptr_t jl_get_buff_tag(void) JL_NOTSAFEPOINT;
 
+/* jl_gc_tracked_buffer_t：GC 追踪的缓冲区类型（用于静态分析） */
 typedef void jl_gc_tracked_buffer_t; // For the benefit of the static analyzer
+/* jl_gc_alloc_buf：分配 GC 追踪的缓冲区 */
 STATIC_INLINE jl_gc_tracked_buffer_t *jl_gc_alloc_buf(jl_ptls_t ptls, size_t sz)
 {
     return jl_gc_alloc(ptls, sz, (void*)jl_buff_tag);
 }
 
+/* ======= 永久分配（系统映像）函数 ======= */
+/* 在系统映像中分配 8/32 位的装箱值 */
 jl_value_t *jl_permbox8(jl_datatype_t *t, uintptr_t tag, uint8_t x) JL_NOTSAFEPOINT;
 jl_value_t *jl_permbox32(jl_datatype_t *t, uintptr_t tag, uint32_t x) JL_NOTSAFEPOINT;
+/* 创建永久符号向量 */
 jl_svec_t *jl_perm_symsvec(size_t n, ...);
 
+/* 编译时参数数量检查宏（通过 sizeof 技巧），仅 GCC 可用 */
 // this sizeof(__VA_ARGS__) trick can't be computed until C11, but that only matters to Clang in some situations
 #if !defined(__clang_analyzer__) && !(defined(_COMPILER_ASAN_ENABLED_) || defined(_COMPILER_TSAN_ENABLED_))
 #ifdef _COMPILER_GCC_
+/* jl_perm_symsvec：编译时验证参数数量的永久符号向量创建宏 */
 #define jl_perm_symsvec(n, ...) \
     (jl_perm_symsvec)(__extension__({                                         \
             static_assert(                                                    \
@@ -722,6 +804,7 @@ jl_svec_t *jl_perm_symsvec(size_t n, ...);
         }), __VA_ARGS__)
 #ifdef jl_svec
 #undef jl_svec
+/* jl_svec：编译时验证参数数量的简单向量创建宏 */
 #define jl_svec(n, ...) \
     (ijl_svec)(__extension__({                                                \
             static_assert(                                                    \
@@ -741,30 +824,44 @@ jl_svec_t *jl_perm_symsvec(size_t n, ...);
 #endif
 #endif
 
+/* ======= GC 追踪与终结器 ======= */
+/* 追踪通过 malloc 分配的 GenericMemory */
 void jl_gc_track_malloced_genericmemory(jl_ptls_t ptls, jl_genericmemory_t *m, int isaligned) JL_NOTSAFEPOINT;
+/* 获取 GenericMemory 的字节数 */
 size_t jl_genericmemory_nbytes(jl_genericmemory_t *a) JL_NOTSAFEPOINT;
+/* 查询内存块的可用大小 */
 size_t memory_block_usable_size(void *mem, int isaligned) JL_NOTSAFEPOINT;
+/* 统计分配字节数 */
 void jl_gc_count_allocd(size_t sz) JL_NOTSAFEPOINT;
+/* 运行所有终结器 */
 void jl_gc_run_all_finalizers(jl_task_t *ct);
+/* 释放任务栈 */
 void jl_release_task_stack(jl_ptls_t ptls, jl_task_t *task);
+/* 添加终结器（实际实现） */
 void jl_gc_add_finalizer_(jl_ptls_t ptls, void *v, void *f) JL_NOTSAFEPOINT;
 
+/* ======= GC 调试与统计 ======= */
 void jl_gc_debug_fprint_status(ios_t *s) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_gc_debug_fprint_critical_error(ios_t *s) JL_NOTSAFEPOINT;
 void jl_print_gc_stats(JL_STREAM *s);
 void jl_gc_reset_alloc_count(void);
+/* 生成状态计数器 */
 uint32_t jl_get_gs_ctr(void);
 void jl_set_gs_ctr(uint32_t ctr);
 
+/* 静态展示详细级别 */
 #define JL_STATIC_SHOW_VERBOSITY_MINIMAL 0
 #define JL_STATIC_SHOW_VERBOSITY_DEFAULT 1
 #define JL_STATIC_SHOW_VERBOSITY_FULL 2
 
+/* jl_static_show_config_t：静态展示配置结构体 */
 typedef struct _jl_static_show_config_t {
     uint8_t verbosity;
 } jl_static_show_config_t;
+/* 静态展示函数签名 */
 size_t jl_static_show_func_sig_(JL_STREAM *s, jl_value_t *type, jl_static_show_config_t ctx) JL_NOTSAFEPOINT;
 
+/* undefref_check：检查是否引用了未定义的字段（返回 NULL 表示未定义） */
 STATIC_INLINE jl_value_t *undefref_check(jl_datatype_t *dt, jl_value_t *v) JL_NOTSAFEPOINT
 {
      if (dt->layout->first_ptr >= 0) {
@@ -775,57 +872,81 @@ STATIC_INLINE jl_value_t *undefref_check(jl_datatype_t *dt, jl_value_t *v) JL_NO
     return v;
 }
 
+/* ======= 辅助类型 ======= */
 // -- helper types -- //
 
+/* jl_code_info_flags_bitfield_t：CodeInfo 标志位域，控制内联、常量传播等编译行为 */
 typedef struct {
-    uint16_t propagate_inbounds:1;
-    uint16_t has_fcall:1;
-    uint16_t has_image_globalref:1;
-    uint16_t nospecializeinfer:1;
-    uint16_t isva:1;
-    uint16_t nargsmatchesmethod:1;
-    uint16_t inlining:2; // 0 = use heuristic; 1 = aggressive; 2 = none
-    uint16_t constprop:2; // 0 = use heuristic; 1 = aggressive; 2 = none
-    uint16_t has_ssaflags:1;
+    uint16_t propagate_inbounds:1;   // 传播 @inbounds
+    uint16_t has_fcall:1;            // 包含函数调用
+    uint16_t has_image_globalref:1;  // 包含系统映像全局引用
+    uint16_t nospecializeinfer:1;    // 禁止特化推断
+    uint16_t isva:1;                 // 是否为变长参数函数
+    uint16_t nargsmatchesmethod:1;   // 参数数量与方法定义匹配
+    uint16_t inlining:2;             // 0 = 启发式; 1 = 激进; 2 = 禁止
+    uint16_t constprop:2;            // 0 = 启发式; 1 = 激进; 2 = 禁止
+    uint16_t has_ssaflags:1;         // 包含 SSA 标志
 } jl_code_info_flags_bitfield_t;
 
+/* jl_code_info_flags_t：标志联合，可位域访问或作为 uint16t 整体访问 */
 typedef union {
     jl_code_info_flags_bitfield_t bits;
     uint16_t packed;
 } jl_code_info_flags_t;
 
+/* ======= 编译与 JIT 函数 ======= */
 // -- functions -- //
 
-// Also defined in typeinfer.jl - See documentation there.
+/* 源代码模式标志（也在 typeinfer.jl 中定义） */
 #define SOURCE_MODE_NOT_REQUIRED            0x0
 #define SOURCE_MODE_ABI                     0x1
 
+/* 方法签名查找模式 */
 #define METHOD_SIG_LATEST_WHICH             0b0001
 #define METHOD_SIG_LATEST_ONLY              0b0010
 #define METHOD_SIG_PRECOMPILE_MANY          0b0100
 
+/* ======= 编译引擎 ======= */
+/* 初始化 JIT 编译引擎 */
 void jl_init_engine(void);
+/* 引擎清理（GC 时调用） */
 void jl_engine_sweep(jl_ptls_t *gc_all_tls_states) JL_NOTSAFEPOINT;
+/* 查询方法实例是否已在引擎中预留 */
 int jl_engine_hasreserved(jl_method_instance_t *m, jl_value_t *owner) JL_NOTSAFEPOINT;
+/* 在编译引擎中预留 CodeInstance */
 JL_DLLEXPORT jl_code_instance_t *jl_engine_reserve(jl_method_instance_t *m, jl_value_t *owner);
+/* 完成预留：将 CodeInfo 关联到 CodeInstance */
 JL_DLLEXPORT void jl_engine_fulfill(jl_code_instance_t *ci, jl_code_info_t *src);
 
+/* ======= 类型推断与编译 ======= */
+/* jl_type_infer：执行类型推断 */
 JL_DLLEXPORT jl_code_instance_t *jl_type_infer(jl_method_instance_t *li JL_PROPAGATES_ROOT, size_t world, uint8_t source_mode, uint8_t trim_mode);
+/* 查询/设置类型推断后是否保留 IR */
 JL_DLLEXPORT int8_t jl_get_type_infer_preserve_ir(void);
 JL_DLLEXPORT void jl_set_type_infer_preserve_ir(int8_t v);
+/* 查询/设置预编译时是否保留 IR */
 JL_DLLEXPORT int8_t jl_get_precompile_keep_ir(void);
 JL_DLLEXPORT void jl_set_precompile_keep_ir(int8_t v);
+/* GDB 调试用：获取类型化后的 CodeInfo */
 JL_DLLEXPORT jl_code_info_t *jl_gdbcodetyped1(jl_method_instance_t *mi, size_t world);
+/* 内部编译方法 */
 JL_DLLEXPORT jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *meth JL_PROPAGATES_ROOT, size_t world);
+/* 获取未推断的方法 */
 JL_DLLEXPORT jl_code_instance_t *jl_get_method_uninferred(
         jl_method_instance_t *mi JL_PROPAGATES_ROOT, jl_value_t *rettype,
         size_t min_world, size_t max_world, jl_debuginfo_t *di, jl_svec_t *edges);
+/* 检查 MI 缓存中是否已有指定 CI */
 JL_DLLEXPORT int jl_mi_cache_has_ci(jl_method_instance_t *mi, jl_code_instance_t *ci) JL_NOTSAFEPOINT;
+/* 读取 CodeInstance 的调用指针 */
 JL_DLLEXPORT void jl_read_codeinst_invoke(jl_code_instance_t *ci, uint8_t *specsigflags, jl_callptr_t *invoke, void **specptr, int waitcompile);
+/* 批量添加 CodeInstances 到 JIT */
 JL_DLLEXPORT void jl_add_codeinsts_to_jit(jl_array_t *codeinsts, jl_array_t *srcs);
 
+/* 一次性调用（无需缓存） */
 JL_DLLEXPORT jl_value_t *jl_invoke_oneshot(jl_value_t *F, jl_value_t **args, uint32_t nargs, jl_method_instance_t *meth);
 
+/* ======= CodeInstance 创建 ======= */
+/* 创建未初始化的 CodeInstance */
 JL_DLLEXPORT jl_code_instance_t *jl_new_codeinst_uninit(jl_method_instance_t *mi, jl_value_t *owner);
 JL_DLLEXPORT jl_code_instance_t *jl_new_codeinst(
         jl_method_instance_t *mi, jl_value_t *owner,
@@ -836,6 +957,7 @@ JL_DLLEXPORT jl_code_instance_t *jl_new_codeinst(
         jl_debuginfo_t *di, jl_svec_t *edges /* , int absolute_max*/);
 JL_DLLEXPORT jl_code_instance_t *jl_get_ci_equiv(jl_code_instance_t *ci JL_PROPAGATES_ROOT, size_t target_world) JL_NOTSAFEPOINT;
 
+/* jl_get_ci_mi：从 CodeInstance 获取关联的 MethodInstance（处理 abioverride） */
 STATIC_INLINE jl_method_instance_t *jl_get_ci_mi(jl_code_instance_t *ci JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT
 {
     jl_value_t *def = ci->def;
@@ -845,27 +967,38 @@ STATIC_INLINE jl_method_instance_t *jl_get_ci_mi(jl_code_instance_t *ci JL_PROPA
     return (jl_method_instance_t*)def;
 }
 
+/* ======= 调试信息与编译 ======= */
+/* 从调试信息定义获取模块 */
 JL_DLLEXPORT jl_module_t *jl_debuginfo_module1(jl_value_t *debuginfo_def) JL_NOTSAFEPOINT;
 JL_DLLEXPORT const char *jl_debuginfo_name(jl_value_t *func) JL_NOTSAFEPOINT;
 
+/* 检查 CodeInstance 是否已编译 */
 JL_DLLEXPORT int jl_is_compiled_codeinst(jl_code_instance_t *codeinst) JL_NOTSAFEPOINT;
+/* 编译方法实例 */
 JL_DLLEXPORT void jl_compile_method_instance(jl_method_instance_t *mi, jl_tupletype_t *types, size_t world);
 JL_DLLEXPORT void jl_compile_method_sig(jl_method_t *m, jl_value_t *types, jl_svec_t *sparams, size_t world);
 JL_DLLEXPORT int jl_compile_hint(jl_tupletype_t *types);
+/* 获取用于解释器的 CodeInfo */
 jl_code_info_t *jl_code_for_interpreter(jl_method_instance_t *lam JL_PROPAGATES_ROOT, size_t world);
 jl_value_t *jl_code_or_ci_for_interpreter(jl_method_instance_t *lam JL_PROPAGATES_ROOT, size_t world);
+/* 检查 CodeInfo 是否需要编译器 */
 int jl_code_requires_compiler(jl_code_info_t *src, int include_force_compile);
+/* 从 IR 表达式创建 CodeInfo */
 jl_code_info_t *jl_new_code_info_from_ir(jl_expr_t *ast);
 JL_DLLEXPORT jl_code_info_t *jl_new_code_info_uninit(void);
+/* 解析 IR 中的定义副作用 */
 JL_DLLEXPORT void jl_resolve_definition_effects_in_ir(jl_array_t *stmts, jl_module_t *m, jl_svec_t *sparam_vals, jl_value_t *binding_edge,
                                            int binding_effects);
+/* 添加绑定反向边 */
 JL_DLLEXPORT int jl_maybe_add_binding_backedge(jl_binding_t *b, jl_value_t *edge, jl_method_t *in_method);
 JL_DLLEXPORT void jl_add_binding_backedge(jl_binding_t *b, jl_value_t *edge);
 
-static const uint8_t MI_FLAG_BACKEDGES_INUSE = 0b0100;
-static const uint8_t MI_FLAG_BACKEDGES_DIRTY = 0b1000;
-static const uint8_t MI_FLAG_BACKEDGES_ALL = 0b1100;
+/* MethodInstance 反向边标志 */
+static const uint8_t MI_FLAG_BACKEDGES_INUSE = 0b0100;  // 反向边正在使用中
+static const uint8_t MI_FLAG_BACKEDGES_DIRTY = 0b1000;  // 反向边已过时
+static const uint8_t MI_FLAG_BACKEDGES_ALL = 0b1100;    // 所有反向边标志位
 
+/* jl_mi_get_backedges_mutate：获取 MI 的反向边数组（可能修改 flags） */
 STATIC_INLINE jl_array_t *jl_mi_get_backedges_mutate(jl_method_instance_t *mi JL_PROPAGATES_ROOT, uint8_t *flags) {
     *flags = jl_atomic_load_relaxed(&mi->flags) & (MI_FLAG_BACKEDGES_ALL);
     jl_array_t *ret = mi->backedges;
@@ -874,12 +1007,14 @@ STATIC_INLINE jl_array_t *jl_mi_get_backedges_mutate(jl_method_instance_t *mi JL
     return ret;
 }
 
+/* jl_mi_get_backedges：获取 MI 的反向边数组（不加标志，需确保无竞争） */
 STATIC_INLINE jl_array_t *jl_mi_get_backedges(jl_method_instance_t *mi JL_PROPAGATES_ROOT) {
     assert(!(jl_atomic_load_relaxed(&mi->flags) & MI_FLAG_BACKEDGES_ALL));
     jl_array_t *ret = mi->backedges;
     return ret;
 }
 
+/* 反向边的基本操作：获取、设置、清除、推入 */
 int get_next_edge(jl_array_t *list JL_PROPAGATES_ROOT, int i,
                   jl_value_t **invokesig JL_OUT_ROOTED_BY_ARG(0),
                   jl_code_instance_t **caller JL_OUT_ROOTED_BY_ARG(0)) JL_NOTSAFEPOINT;
@@ -889,72 +1024,92 @@ int set_next_edge(jl_array_t *list JL_PROPAGATES_ROOT, int i,
 int clear_next_edge(jl_array_t *list JL_PROPAGATES_ROOT, int i,
                     jl_value_t *invokesig, jl_code_instance_t *caller) JL_NOTSAFEPOINT;
 void push_edge(jl_array_t *list, jl_value_t *invokesig, jl_code_instance_t *caller);
+/* 完成反向边操作后清理 */
 void jl_mi_done_backedges(jl_method_instance_t *mi JL_PROPAGATES_ROOT, uint8_t old_flags);
 
+/* ======= 方法根引用 ======= */
+/* 添加方法根引用 */
 JL_DLLEXPORT void jl_add_method_root(jl_method_t *m, jl_module_t *mod, jl_value_t* root);
 void jl_append_method_roots(jl_method_t *m, uint64_t modid, jl_array_t* roots);
+/* RLE 压缩的方法根引用操作 */
 int get_root_reference(rle_reference *rr, jl_method_t *m, size_t i) JL_NOTSAFEPOINT;
 jl_value_t *lookup_root(jl_method_t *m, uint64_t key, int index) JL_NOTSAFEPOINT;
 int nroots_with_key(jl_method_t *m, uint64_t key) JL_NOTSAFEPOINT;
 
+/* 验证类型参数是否有效 */
 int jl_valid_type_param(jl_value_t *v);
 
+/* 两参数版本的 apply */
 JL_DLLEXPORT jl_value_t *jl_apply_2va(jl_value_t *f, jl_value_t **args, uint32_t nargs);
 
+/* ======= 错误处理 ======= */
 void JL_NORETURN jl_method_error(jl_value_t *F, jl_value_t **args, size_t na, size_t world);
 JL_DLLEXPORT jl_value_t *jl_get_exceptionf(jl_datatype_t *exception_type, const char *fmt, ...);
 
 JL_DLLEXPORT void jl_typeassert(jl_value_t *x, jl_value_t *t);
 
+/* JL_CALLABLE：定义可调用函数的标准签名宏 */
 #define JL_CALLABLE(name)                                               \
     JL_DLLEXPORT jl_value_t *name(jl_value_t *F, jl_value_t **args, uint32_t nargs)
 
 JL_CALLABLE(jl_f_tuple);
+/* ======= 信号处理与 IO ======= */
 void jl_install_default_signal_handlers(void);
 void restore_signals(void);
 void jl_install_thread_signal_handler(jl_ptls_t ptls);
 
+/* UV 事件循环 */
 extern uv_loop_t *jl_io_loop;
 JL_DLLEXPORT void jl_uv_flush(uv_stream_t *stream);
 
+/* jl_typeenv_t：类型环境链表（类型变量到值的映射） */
 typedef struct jl_typeenv_t {
-    jl_tvar_t *var;
-    jl_value_t *val;
-    struct jl_typeenv_t *prev;
+    jl_tvar_t *var;       // 类型变量
+    jl_value_t *val;      // 绑定的值
+    struct jl_typeenv_t *prev;  // 链表中前一个节点
 } jl_typeenv_t;
 
 int jl_tuple_isa(jl_value_t **child, size_t cl, jl_datatype_t *pdt);
 int jl_tuple1_isa(jl_value_t *child1, jl_value_t **child, size_t cl, jl_datatype_t *pdt);
 
+/* atomic_kind：原子操作分类，标识字段是否为原子访问 */
 enum atomic_kind {
-    isatomic_none = 0,
-    isatomic_object = 1,
-    isatomic_field = 2
+    isatomic_none = 0,   // 非原子
+    isatomic_object = 1, // 原子对象
+    isatomic_field = 2   // 原子字段
 };
 
+/* ======= 类型运算函数 ======= */
 JL_DLLEXPORT int jl_has_intersect_type_not_kind(jl_value_t *t);
 int jl_subtype_invariant(jl_value_t *a, jl_value_t *b, int ta);
 JL_DLLEXPORT int jl_has_concrete_subtype(jl_value_t *typ);
+/* 参数元组类型操作 */
 jl_tupletype_t *jl_inst_arg_tuple_type(jl_value_t *arg1, jl_value_t **args, size_t nargs, int leaf);
 jl_tupletype_t *jl_lookup_arg_tuple_type(jl_value_t *arg1 JL_PROPAGATES_ROOT, jl_value_t **args, size_t nargs, int leaf);
+/* 方法表操作 */
 JL_DLLEXPORT void jl_method_table_insert(jl_methtable_t *mt, jl_method_t *method, jl_tupletype_t *simpletype);
 void jl_method_table_activate(jl_typemap_entry_t *newentry);
 jl_typemap_entry_t *jl_method_table_add(jl_methtable_t *mt, jl_method_t *method, jl_tupletype_t *simpletype);
+/* 创建内置函数 */
 jl_method_t *jl_mk_builtin_func(jl_datatype_t *dt, jl_sym_t *name, jl_fptr_args_t fptr) JL_GC_DISABLED;
+/* 类型相等性与不等性判断 */
 int jl_obviously_unequal(jl_value_t *a, jl_value_t *b);
 int jl_has_bound_typevars(jl_value_t *v, jl_typeenv_t *env) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_array_t *jl_find_free_typevars(jl_value_t *v);
 JL_DLLEXPORT jl_value_t *jl_rewrap_free_typevars(jl_value_t *t, jl_array_t *pre);
+/* 布局和类型映射 */
 int jl_has_fixed_layout(jl_datatype_t *t);
 JL_DLLEXPORT int jl_struct_try_layout(jl_datatype_t *dt);
 JL_DLLEXPORT int jl_type_mappable_to_c(jl_value_t *ty);
 jl_svec_t *jl_outer_unionall_vars(jl_value_t *u);
+/* 类型交集与子类型判断 */
 jl_value_t *jl_type_intersection_env_s(jl_value_t *a, jl_value_t *b, jl_svec_t **penv, int *issubty);
 jl_value_t *jl_type_intersection_env(jl_value_t *a, jl_value_t *b, jl_svec_t **penv);
 int jl_subtype_matching(jl_value_t *a, jl_value_t *b, jl_svec_t **penv);
 JL_DLLEXPORT int jl_types_egal(jl_value_t *a, jl_value_t *b) JL_NOTSAFEPOINT;
 // specificity comparison assuming !(a <: b) and !(b <: a)
 JL_DLLEXPORT int jl_type_morespecific_no_subtype(jl_value_t *a, jl_value_t *b);
+/* 类型实例化 */
 JL_DLLEXPORT jl_value_t *jl_instantiate_type_with(jl_value_t *t, jl_value_t **env, size_t n);
 JL_DLLEXPORT jl_value_t *jl_instantiate_type_in_env(jl_value_t *ty, jl_unionall_t *env, jl_value_t **vals);
 jl_value_t *jl_substitute_var(jl_value_t *t, jl_tvar_t *var, jl_value_t *val);
@@ -964,33 +1119,45 @@ JL_DLLEXPORT jl_value_t *jl_unwrap_unionall(jl_value_t *v JL_PROPAGATES_ROOT) JL
 JL_DLLEXPORT jl_value_t *jl_rewrap_unionall(jl_value_t *t, jl_value_t *u);
 JL_DLLEXPORT jl_value_t *jl_rewrap_unionall_(jl_value_t *t, jl_value_t *u);
 jl_value_t* jl_substitute_datatype(jl_value_t *t, jl_datatype_t * x, jl_datatype_t * y);
+/* Union 类型组件操作 */
 int jl_count_union_components(jl_value_t *v);
 JL_DLLEXPORT jl_value_t *jl_nth_union_component(jl_value_t *v JL_PROPAGATES_ROOT, int i) JL_NOTSAFEPOINT;
 int jl_find_union_component(jl_value_t *haystack, jl_value_t *needle, unsigned *nth) JL_NOTSAFEPOINT;
+/* ======= 数据类型创建与缓存 ======= */
+/* 创建抽象类型 */
 jl_datatype_t *jl_new_abstracttype(jl_value_t *name, jl_module_t *module,
                                    jl_datatype_t *super, jl_svec_t *parameters);
 jl_datatype_t *jl_new_uninitialized_datatype(void);
 void jl_precompute_memoized_dt(jl_datatype_t *dt, int cacheable);
+/* 类型包装 */
 JL_DLLEXPORT jl_typeeq_t *jl_wrap_Type(jl_value_t *t);  // x -> Type{x}
 jl_vararg_t *jl_wrap_vararg(jl_value_t *t, jl_value_t *n, int check, int nothrow);
 void jl_reinstantiate_inner_types(jl_datatype_t *t);
+/* 类型缓存查找和插入 */
 jl_datatype_t *jl_lookup_cache_type_(jl_datatype_t *type);
 void jl_cache_type_(jl_datatype_t *type);
 jl_svec_t *cache_rehash_set(jl_svec_t *a, size_t newsz);
+/* ======= 字段原子操作 ======= */
+/* 设置/交换/修改/替换结构体字段（支持原子操作） */
 void set_nth_field(jl_datatype_t *st, jl_value_t *v, size_t i, jl_value_t *rhs, int isatomic) JL_NOTSAFEPOINT;
 jl_value_t *swap_nth_field(jl_datatype_t *st, jl_value_t *v, size_t i, jl_value_t *rhs, int isatomic);
 jl_value_t *modify_nth_field(jl_datatype_t *st, jl_value_t *v, size_t i, jl_value_t *op, jl_value_t *rhs, int isatomic);
 jl_value_t *replace_nth_field(jl_datatype_t *st, jl_value_t *v, size_t i, jl_value_t *expected, jl_value_t *rhs, int isatomic);
 int set_nth_fieldonce(jl_datatype_t *st, jl_value_t *v, size_t i, jl_value_t *rhs, int isatomic);
+/* 位级别的原子操作 */
 jl_value_t *swap_bits(jl_value_t *ty, char *v, uint8_t *psel, jl_value_t *parent, jl_value_t *rhs, enum atomic_kind isatomic);
 jl_value_t *replace_value(jl_value_t *ty, _Atomic(jl_value_t*) *p, jl_value_t *parent, jl_value_t *expected, jl_value_t *rhs, int isatomic, jl_module_t *mod, jl_sym_t *name);
 jl_value_t *replace_bits(jl_value_t *ty, char *p, uint8_t *psel, jl_value_t *parent, jl_value_t *expected, jl_value_t *rhs, enum atomic_kind isatomic);
 jl_value_t *modify_value(jl_value_t *ty, _Atomic(jl_value_t*) *p, jl_value_t *parent, jl_value_t *op, jl_value_t *rhs, int isatomic, jl_binding_t *b, jl_module_t *mod, jl_sym_t *name);
 jl_value_t *modify_bits(jl_value_t *ty, char *p, uint8_t *psel, jl_value_t *parent, jl_value_t *op, jl_value_t *rhs, enum atomic_kind isatomic);
 int setonce_bits(jl_datatype_t *rty, char *p, jl_value_t *owner, jl_value_t *rhs, enum atomic_kind isatomic);
+/* 创建表达式节点 */
 jl_expr_t *jl_exprn(jl_sym_t *head, size_t n);
+/* ======= 泛型函数与模块操作 ======= */
+/* 创建泛型函数 */
 jl_value_t *jl_new_generic_function(jl_sym_t *name, jl_module_t *module, size_t new_world);
 jl_value_t *jl_new_generic_function_with_supertype(jl_sym_t *name, jl_module_t *module, jl_datatype_t *st, size_t new_world);
+/* 遍历所有可达方法表 */
 int jl_foreach_reachable_mtable(int (*visit)(jl_methtable_t *mt, void *env), jl_array_t *mod_array, void *env);
 void jl_init_main_module(void);
 JL_DLLEXPORT int jl_is_submodule(jl_module_t *child, jl_module_t *parent) JL_NOTSAFEPOINT;
@@ -998,17 +1165,24 @@ jl_array_t *jl_get_loaded_modules(void);
 JL_DLLEXPORT int jl_datatype_isinlinealloc(jl_datatype_t *ty, int pointerfree);
 int jl_type_equality_is_identity(jl_value_t *t1, jl_value_t *t2) JL_NOTSAFEPOINT;
 
+/* ======= 绑定操作 ======= */
+/* 检查绑定赋值值 */
 jl_value_t *jl_check_binding_assign_value(jl_binding_t *b JL_PROPAGATES_ROOT, jl_module_t *mod, jl_sym_t *var, jl_value_t *rhs JL_MAYBE_UNROOTED, const char *msg);
 void jl_binding_set_type(jl_binding_t *b, jl_module_t *mod, jl_sym_t *sym, jl_value_t *ty);
 JL_DLLEXPORT void jl_declare_global(jl_module_t *m, jl_value_t *arg, jl_value_t *set_type, int strong);
 JL_DLLEXPORT jl_binding_partition_t *jl_declare_constant_val3(jl_binding_t *b, jl_module_t *mod, jl_sym_t *var, jl_value_t *val JL_ROOTED_BY_ARG(1) JL_MAYBE_UNROOTED, enum jl_partition_kind, size_t new_world) JL_GLOBALLY_ROOTED;
+/* 顶层求值 */
 JL_DLLEXPORT jl_value_t *jl_toplevel_eval_flex(jl_module_t *m, jl_value_t *e, int fast, int expanded, const char **toplevel_filename, int *toplevel_lineno);
 JL_DLLEXPORT jl_value_t *jl_eval_thunk(jl_module_t *JL_NONNULL m, jl_code_info_t *thk, int fast);
+/* 模块导入/导出操作 */
 int jl_module_public_(jl_module_t *from, jl_sym_t *s, int exported, size_t new_world);
 void jl_module_initial_using(jl_module_t *to, jl_module_t *from);
+/* 模块 using 列表访问（inline 辅助函数） */
 STATIC_INLINE struct _jl_module_using *module_usings_getidx(jl_module_t *m JL_PROPAGATES_ROOT, size_t i) JL_NOTSAFEPOINT;
 STATIC_INLINE jl_module_t *module_usings_getmod(jl_module_t *m JL_PROPAGATES_ROOT, size_t i) JL_NOTSAFEPOINT;
+/* 添加模块 using 反向边 */
 void jl_add_usings_backedge(jl_module_t *from, jl_module_t *to);
+/* modstack_t：模块绑定栈（用于导入链的链表节点） */
 typedef struct _modstack_t {
     jl_binding_t *b;
     struct _modstack_t *prev;
@@ -1033,39 +1207,51 @@ STATIC_INLINE size_t module_usings_max(jl_module_t *m) JL_NOTSAFEPOINT {
     return m->usings.max/4;
 }
 
+/* ======= 模块与全局变量查找 ======= */
 JL_DLLEXPORT jl_sym_t *jl_module_name(jl_module_t *m) JL_NOTSAFEPOINT;
 jl_module_t *jl_module_root(jl_module_t *m);
 void jl_add_scanned_method(jl_module_t *m, jl_method_t *meth);
+/* 全局变量求值 */
 jl_value_t *jl_eval_global_var(jl_module_t *m JL_PROPAGATES_ROOT, jl_sym_t *e, size_t world);
 JL_DLLEXPORT jl_value_t *jl_eval_globalref(jl_globalref_t *g, size_t world);
 jl_value_t *jl_get_globalref_value(jl_globalref_t *gr, size_t world);
 jl_value_t *jl_get_global_value(jl_module_t *m, jl_sym_t *var, size_t world);
+/* 不透明闭包解释执行 */
 jl_value_t *jl_interpret_opaque_closure(jl_opaque_closure_t *clos, jl_value_t **args, size_t nargs);
+/* 顶层 thunk 和表达式解释执行 */
 jl_value_t *jl_interpret_toplevel_thunk(jl_module_t *m, jl_code_info_t *src);
 jl_value_t *jl_interpret_toplevel_expr_in(jl_module_t *m, jl_value_t *e,
                                           jl_code_info_t *src,
                                           jl_svec_t *sparam_vals);
 JL_DLLEXPORT int jl_is_toplevel_only_expr(jl_value_t *e) JL_NOTSAFEPOINT;
+/* 在 AST 上调用 Scheme 宏函数 */
 jl_value_t *jl_call_scm_on_ast_and_loc(const char *funcname, jl_value_t *expr,
                                        jl_module_t *inmodule, const char *file, int line);
 int jl_isa_ast_node(jl_value_t *e) JL_NOTSAFEPOINT;
 
+/* ======= 方法查找与分发 ======= */
+/* 内置方法查找 */
 jl_method_instance_t *jl_builtin_method_lookup(jl_value_t *builtin);
+/* 通用方法查找 */
 JL_DLLEXPORT jl_method_instance_t *jl_method_lookup(jl_value_t **args, size_t nargs, size_t world);
 jl_method_instance_t *jl_apply_lookup(jl_value_t **args, size_t nargs, size_t world);
 
+/* 泛型函数调用 */
 jl_value_t *jl_gf_invoke_by_method(jl_method_t *method, jl_value_t *gf, jl_value_t **args, size_t nargs);
 jl_value_t *jl_gf_invoke(jl_value_t *types, jl_value_t *f, jl_value_t **args, size_t nargs);
+/* 带世界范围的方法查找 */
 JL_DLLEXPORT jl_value_t *jl_gf_invoke_lookup_worlds(jl_value_t *types, jl_value_t *mt, size_t world, size_t *min_world, size_t *max_world);
 JL_DLLEXPORT jl_value_t *jl_matching_methods(jl_tupletype_t *types, jl_value_t *mt, int lim, int include_ambiguous,
                                              size_t world, size_t *min_valid, size_t *max_valid, int *ambig);
-JL_DLLEXPORT jl_value_t *jl_gf_invoke_lookup_worlds(jl_value_t *types, jl_value_t *mt, size_t world, size_t *min_world, size_t *max_world);
 
 
+/* ======= 参数类型与方法表查询 ======= */
+/* 获取第 n 个参数的数据类型/类型名 */
 jl_datatype_t *jl_nth_argument_datatype(jl_value_t *argtypes JL_PROPAGATES_ROOT, int n) JL_NOTSAFEPOINT;
 jl_typename_t *jl_nth_argument_datatypename(jl_value_t *argtypes JL_PROPAGATES_ROOT, int n) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_value_t *jl_argument_datatype(jl_value_t *argt JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_value_t *jl_argument_datatypename(jl_value_t *argt JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
+/* 根据参数类型查找方法表/缓存 */
 JL_DLLEXPORT jl_methtable_t *jl_method_table_for(
     jl_value_t *argtypes JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_methcache_t *jl_method_cache_for(
@@ -1074,17 +1260,23 @@ jl_methtable_t *jl_kwmethod_table_for(
     jl_value_t *argtypes JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
 jl_methcache_t *jl_kwmethod_cache_for(
     jl_value_t *argtypes JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
+/* 获取方法所在的方法表/缓存 */
 JL_DLLEXPORT jl_methtable_t *jl_method_get_table(
     jl_method_t *method JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_methcache_t *jl_method_get_cache(
     jl_method_t *method JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT;
 
+/* 指针相等性判断 */
 JL_DLLEXPORT int jl_pointer_egal(jl_value_t *t);
 JL_DLLEXPORT jl_value_t *jl_nth_slot_type(jl_value_t *sig JL_PROPAGATES_ROOT, size_t i) JL_NOTSAFEPOINT;
+/* 计算字段偏移量 */
 void jl_compute_field_offsets(jl_datatype_t *st);
+/* 验证超类型和字段类型 */
 void jl_check_valid_supertype(jl_value_t *super, const char *type_name);
 void jl_check_field_types(jl_svec_t *ftypes, jl_sym_t *type_name);
+/* 运行模块初始化器 */
 void jl_module_run_initializer(jl_module_t *m);
+/* 获取模块的绑定 */
 JL_DLLEXPORT jl_binding_t *jl_get_module_binding(jl_module_t *m JL_PROPAGATES_ROOT, jl_sym_t *var, int alloc);
 JL_DLLEXPORT void jl_binding_deprecation_warning(jl_binding_t *b);
 JL_DLLEXPORT jl_binding_partition_t *jl_replace_binding_locked(jl_binding_t *b JL_PROPAGATES_ROOT,
@@ -1092,23 +1284,32 @@ JL_DLLEXPORT jl_binding_partition_t *jl_replace_binding_locked(jl_binding_t *b J
 JL_DLLEXPORT jl_binding_partition_t *jl_replace_binding_locked2(jl_binding_t *b JL_PROPAGATES_ROOT,
     jl_binding_partition_t *old_bpart, jl_value_t *restriction_val, size_t kind, size_t new_world) JL_GLOBALLY_ROOTED;
 JL_DLLEXPORT void jl_update_loaded_bpart(jl_binding_t *b, jl_binding_partition_t *bpart);
+/* ======= 全局根与模块追踪 ======= */
 extern jl_array_t *jl_module_init_order JL_GLOBALLY_ROOTED;
 extern htable_t jl_current_modules JL_GLOBALLY_ROOTED;
 extern jl_module_t *jl_precompile_toplevel_module JL_GLOBALLY_ROOTED;
+/* 全局根列表 */
 extern jl_genericmemory_t *jl_global_roots_list JL_GLOBALLY_ROOTED;
 extern jl_genericmemory_t *jl_global_roots_keyset JL_GLOBALLY_ROOTED;
 JL_DLLEXPORT extern size_t jl_require_world;
+/* 全局根检查与操作 */
 JL_DLLEXPORT int jl_is_globally_rooted(jl_value_t *val JL_MAYBE_UNROOTED) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_value_t *jl_as_global_root(jl_value_t *val, int insert) JL_GLOBALLY_ROOTED;
+/* 预编译字段替换 */
 extern jl_svec_t *precompile_field_replace JL_GLOBALLY_ROOTED;
 JL_DLLEXPORT void jl_set_precompile_field_replace(jl_value_t *val, jl_value_t *field, jl_value_t *newval) JL_GLOBALLY_ROOTED;
 
+/* ======= 不透明闭包 (OpaqueClosure) ======= */
+/* 创建不透明闭包 */
 jl_opaque_closure_t *jl_new_opaque_closure(jl_tupletype_t *argt, jl_value_t *rt_lb, jl_value_t *rt_ub,
     jl_value_t *source,  jl_value_t **env, size_t nenv, int do_compile);
+/* 生成不透明闭包方法 */
 jl_method_t *jl_make_opaque_closure_method(jl_module_t *module, jl_value_t *name,
     int nargs, jl_value_t *functionloc, jl_code_info_t *ci, int isva, int isinferred);
+/* 验证不透明闭包参数类型 */
 JL_DLLEXPORT int jl_is_valid_oc_argtype(jl_tupletype_t *argt, jl_method_t *source);
 
+/* jl_bkind_is_some_import：判断绑定分区种类是否为某种导入 */
 STATIC_INLINE int jl_bkind_is_some_import(enum jl_partition_kind kind) JL_NOTSAFEPOINT {
     return kind == PARTITION_KIND_IMPLICIT_CONST || kind == PARTITION_KIND_IMPLICIT_GLOBAL || kind == PARTITION_KIND_EXPLICIT || kind == PARTITION_KIND_IMPORTED;
 }
@@ -1145,11 +1346,12 @@ JL_DLLEXPORT jl_binding_partition_t *jl_get_binding_partition(jl_binding_t *b JL
 JL_DLLEXPORT jl_binding_partition_t *jl_get_binding_partition_with_hint(jl_binding_t *b JL_PROPAGATES_ROOT, jl_binding_partition_t *previous_part, size_t world) JL_GLOBALLY_ROOTED;
 JL_DLLEXPORT jl_binding_partition_t *jl_get_binding_partition_all(jl_binding_t *b JL_PROPAGATES_ROOT, size_t min_world, size_t max_world) JL_GLOBALLY_ROOTED;
 
+/* restriction_kind_pair：绑定限制和种类配对，用于遍历绑定分区 */
 struct restriction_kind_pair {
-    jl_binding_t *binding_if_global;
-    jl_value_t *restriction;
-    enum jl_partition_kind kind;
-    int maybe_depwarn;
+    jl_binding_t *binding_if_global;  // 如果是全局绑定跳转
+    jl_value_t *restriction;          // 限制值
+    enum jl_partition_kind kind;      // 分区种类
+    int maybe_depwarn;                // 是否需要废弃警告
 };
 JL_DLLEXPORT int jl_get_binding_leaf_partitions_restriction_kind(jl_binding_t *b JL_PROPAGATES_ROOT, struct restriction_kind_pair *rkp, size_t min_world, size_t max_world) JL_GLOBALLY_ROOTED;
 JL_DLLEXPORT jl_value_t *jl_get_binding_leaf_partitions_value_if_const(jl_binding_t *b JL_PROPAGATES_ROOT, int *maybe_depwarn, size_t min_world, size_t max_world);
@@ -1336,6 +1538,7 @@ STATIC_INLINE jl_vararg_kind_t jl_va_tuple_kind(jl_datatype_t *t) JL_NOTSAFEPOIN
     return jl_vararg_kind(jl_tparam(t,l-1));
 }
 
+/* ======= 初始化函数 (init.c) ======= */
 // -- init.c -- //
 
 void jl_init_types(void) JL_GC_DISABLED;
@@ -1347,21 +1550,24 @@ void jl_init_runtime_ccall(void);
 void jl_init_intrinsic_functions(void);
 void jl_init_intrinsic_properties(void);
 void jl_init_staticdata(void);
+/* jl_typeapp_t：惰性类型应用（类似 UnionAll 的 where 绑定），表示单步类型替换 */
 // TypeApp: immutable struct with head::Any, param::Any
 // Represents a single lazy type application step (like UnionAll for where bindings).
 typedef struct {
     JL_DATA_TYPE
-    jl_value_t *head;
-    jl_value_t *param;
+    jl_value_t *head;   // 类型头部
+    jl_value_t *param;  // 类型参数
 } jl_typeapp_t;
 
 extern jl_datatype_t *jl_typeapp_type;
+/* 解析类型组 */
 JL_DLLEXPORT jl_value_t *jl_resolve_typegroup(jl_module_t *module, jl_svec_t *typevars, jl_svec_t *struct_infos);
-// Type predicate for TypeApp (inline: called per type node on hot type-query paths)
+/* jl_is_typeapp：判断是否为 TypeApp 类型（热路径内联） */
 STATIC_INLINE int jl_is_typeapp(jl_value_t *v) JL_NOTSAFEPOINT
 {
     return jl_typeapp_type != NULL && jl_typeis(v, jl_typeapp_type);
 }
+/* ======= 更多初始化函数 ======= */
 void jl_init_tasks(void) JL_GC_DISABLED;
 void jl_init_stack_limits(int ismaster, void **stack_hi, void **stack_lo) JL_NOTSAFEPOINT;
 jl_task_t *jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi);
@@ -1372,14 +1578,17 @@ JL_DLLEXPORT void jl_init_options(void);
 
 void jl_set_base_ctx(char *__stk);
 
+/* ======= 线程初始化 ======= */
 extern JL_DLLEXPORT ssize_t jl_tls_offset;
 extern JL_DLLEXPORT const int jl_tls_elf_support;
 void jl_init_threading(void);
 void jl_start_threads(void);
 
+/* ======= GC 安全点 (safepoint) 机制 ======= */
 // Whether the GC is running
 extern uv_mutex_t safepoint_lock;
 extern char *jl_safepoint_pages;
+/* 判断地址是否在安全点区域内 */
 STATIC_INLINE int jl_addr_is_safepoint(uintptr_t addr)
 {
     uintptr_t safepoint_addr = (uintptr_t)jl_safepoint_pages;
@@ -1390,7 +1599,7 @@ extern _Atomic(uint32_t) jl_gc_disable_counter;
 // All the functions are safe to be called from within a signal handler
 // provided that the thread will not be interrupted by another asynchronous
 // signal.
-// Initialize the safepoint
+/* 安全点初始化 */
 void jl_safepoint_init(void);
 // Start the GC, return `1` if the thread should be running the GC.
 // Otherwise, the thread will wait in this function until the GC finishes on
@@ -1424,10 +1633,13 @@ void jl_safepoint_defer_sigint(void);
 int jl_safepoint_consume_sigint(void);
 void jl_wake_libuv(void) JL_NOTSAFEPOINT;
 
+/* 设置/获取 pgcstack 线程局部存储的键 */
 void jl_set_pgcstack(jl_gcframe_t **) JL_NOTSAFEPOINT;
 #if defined(_OS_WINDOWS_)
+/* Windows: pgcstack 键为 DWORD (TLS 索引) */
 typedef DWORD jl_pgcstack_key_t;
 #else
+/* Unix: pgcstack 键为返回 gcframe 指针的函数 */
 typedef jl_gcframe_t ***(*jl_pgcstack_key_t)(void) JL_NOTSAFEPOINT;
 #endif
 JL_DLLEXPORT void jl_pgcstack_getkey(jl_get_pgcstack_func **f, jl_pgcstack_key_t *k) JL_NOTSAFEPOINT;
@@ -1436,6 +1648,7 @@ JL_DLLEXPORT void jl_pgcstack_getkey(jl_get_pgcstack_func **f, jl_pgcstack_key_t
 extern pthread_mutex_t in_signal_lock;
 #endif
 
+/* 设置 GC 并等待（触发 GC 并等待完成） */
 void jl_set_gc_and_wait(jl_task_t *ct);
 
 // Query if this object is perm-allocated in an image.
@@ -1490,6 +1703,7 @@ JL_DLLEXPORT int jl_has_meta(jl_array_t *body, jl_sym_t *sym) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_value_t *jl_parse(const char *text, size_t text_len, jl_value_t *filename,
                                   size_t lineno, size_t offset, jl_value_t *options, jl_module_t *inmodule);
 
+/* ======= 回溯缓冲区 ======= */
 //--------------------------------------------------
 // Backtraces
 
@@ -1528,6 +1742,7 @@ JL_DLLEXPORT jl_value_t *jl_parse(const char *text, size_t text_len, jl_value_t 
 //   3:5     nptr    Number of non-GC-managed buffer elements
 //   6:9     tag     Entry type
 //   10:...  header  Entry-specific header data
+/* jl_bt_element_t：回溯元素，可以是原生指令指针或 GC 管理值的指针 */
 typedef struct _jl_bt_element_t {
     union {
         uintptr_t   uintptr; // Metadata or native instruction ptr
@@ -1535,9 +1750,11 @@ typedef struct _jl_bt_element_t {
     };
 } jl_bt_element_t;
 
+/* 非指针条目标记（全 1 位模式） */
 #define JL_BT_NON_PTR_ENTRY (((uintptr_t)0)-1)
 // Maximum size for an extended backtrace entry (likely significantly larger
 // than the actual size of 3-4 for an interpreter frame)
+/* 扩展回溯条目的最大大小 */
 #define JL_BT_MAX_ENTRY_SIZE 16
 
 STATIC_INLINE int jl_bt_is_native(jl_bt_element_t *bt_entry) JL_NOTSAFEPOINT
@@ -1592,27 +1809,31 @@ STATIC_INLINE size_t jl_bt_entry_size(jl_bt_element_t *bt_entry) JL_NOTSAFEPOINT
         1 : 2 + jl_bt_num_jlvals(bt_entry) + jl_bt_num_uintvals(bt_entry);
 }
 
+/* ======= 栈遍历与调试信息查找 ======= */
 //------------------------------
 // Stack walking and debug info lookup
 
+/* jl_frame_t：从调试信息查找得到的函数元数据（函数名、文件名、行号等） */
 // Function metadata arising from debug info lookup of instruction pointer
 typedef struct {
-    char *func_name;
-    char *file_name;
-    int line;
+    char *func_name;            // 函数名
+    char *file_name;            // 文件名
+    int line;                   // 行号
     // PC within the inlined frame's CodeInfo, or 0 if unavailable.
     // Carried in the DWARF column field by codegen (see `update_lineinfo` in codegen.cpp).
-    int pc;
-    jl_code_instance_t *ci;
-    int fromC;
-    int inlined;
+    int pc;                     // 内联帧中的 PC
+    jl_code_instance_t *ci;     // CodeInstance 指针
+    int fromC;                  // 是否来自 C 代码
+    int inlined;                // 是否内联
 } jl_frame_t;
 
+/* ======= 平台相关的回溯上下文类型 ======= */
 #ifdef _OS_WINDOWS_
 #include <dbghelp.h>
 JL_DLLEXPORT EXCEPTION_DISPOSITION NTAPI __julia_personality(
         PEXCEPTION_RECORD ExceptionRecord, void *EstablisherFrame, PCONTEXT ContextRecord, void *DispatcherContext);
 extern HANDLE hMainThread;
+/* Windows: 使用 CONTEXT 作为上下文 */
 typedef CONTEXT bt_context_t;
 #if defined(_CPU_X86_64_)
 typedef CONTEXT bt_cursor_t;
@@ -1631,6 +1852,7 @@ void jl_profile_process_dll_events(void) JL_NOTSAFEPOINT;
 #pragma GCC visibility push(default)
 #  include <libunwind.h>
 #pragma GCC visibility pop
+/* libunwind: 使用 libunwind 的上下文和游标类型 */
 typedef unw_context_t bt_context_t;
 typedef unw_cursor_t bt_cursor_t;
 #  if (!defined(SYSTEM_LIBUNWIND) || UNW_VERSION_MAJOR > 1 ||   \
@@ -1641,25 +1863,36 @@ typedef unw_cursor_t bt_cursor_t;
 #  endif
 #else
 // Unwinding is disabled
+/* 栈展开被禁用：使用整型占位 */
 typedef int bt_context_t;
 typedef int bt_cursor_t;
 #endif
+/* ======= 回溯记录函数 ======= */
+/* 记录当前线程的回溯 */
 size_t rec_backtrace(jl_bt_element_t *bt_data, size_t maxsize, int skip) JL_NOTSAFEPOINT;
 // Record backtrace from a signal handler. `ctx` is the context of the code
 // which was asynchronously interrupted.
+/* 从信号处理程序中记录回溯 */
 size_t rec_backtrace_ctx(jl_bt_element_t *bt_data, size_t maxsize, bt_context_t *ctx,
                          jl_gcframe_t *pgcstack) JL_NOTSAFEPOINT;
 #ifdef LLVMLIBUNWIND
 size_t rec_backtrace_ctx_dwarf(jl_bt_element_t *bt_data, size_t maxsize, bt_context_t *ctx, jl_gcframe_t *pgcstack) JL_NOTSAFEPOINT;
 #endif
+/* 获取 Julia 级的回溯对象 */
 JL_DLLEXPORT jl_value_t *jl_get_backtrace(void);
+/* 从当前位置生成回溯 */
 JL_DLLEXPORT jl_value_t *jl_backtrace_from_here(int returnsp, int skip);
+/* 打印关键错误信息（含回溯） */
 void jl_fprint_critical_error(ios_t *t, int sig, int si_code, bt_context_t *context, jl_task_t *ct);
+/* 触发调试器 */
 JL_DLLEXPORT void jl_raise_debugger(void) JL_NOTSAFEPOINT;
+/* GDB 查找 IP */
 JL_DLLEXPORT void jl_gdblookup(void* ip) JL_NOTSAFEPOINT;
+/* 打印所有任务的回溯 */
 JL_DLLEXPORT void jl_print_task_backtraces(int show_done) JL_NOTSAFEPOINT;
 void jl_fprint_native_codeloc(ios_t *s, uintptr_t ip) JL_NOTSAFEPOINT;
 void jl_fprint_bt_entry_codeloc(ios_t *s, jl_bt_element_t *bt_data) JL_NOTSAFEPOINT;
+/* 线程挂起/恢复 */
 void jl_thread_resume(int tid) JL_NOTSAFEPOINT;
 int jl_thread_suspend(int16_t tid, bt_context_t *ctx) JL_NOTSAFEPOINT;
 
@@ -1680,11 +1913,13 @@ STATIC_INLINE char *jl_copy_str(char **to, const char *from) JL_NOTSAFEPOINT
 JL_DLLEXPORT size_t jl_capture_interp_frame(jl_bt_element_t *bt_data,
         void *frameend, size_t space_remaining) JL_NOTSAFEPOINT;
 
+/* ======= 异常栈 ======= */
 //--------------------------------------------------
 // Exception stack access and manipulation
 
 // Exception stack: a stack of pairs of (exception,raw_backtrace).
 // The stack may be traversed and accessed with the functions below.
+/* _jl_excstack_t：异常栈，存储（异常, 原始回溯）对 */
 struct _jl_excstack_t { // typedef in julia.h
     size_t top;
     size_t reserved_size;
@@ -1723,9 +1958,10 @@ void jl_push_excstack(jl_task_t *ct, jl_excstack_t **stack JL_REQUIRE_ROOTED_SLO
                       jl_value_t *exception JL_ROOTED_BY_ARG(1),
                       jl_bt_element_t *bt_data, size_t bt_size);
 
-// System util to get maximum RSS
+/* 获取最大常驻内存集大小 (RSS) */
 JL_DLLEXPORT size_t jl_maxrss(void);
 
+/* ======= 线程局部随机数生成器 ======= */
 //--------------------------------------------------
 // congruential random number generator
 // for a small amount of thread-local randomness
@@ -1733,6 +1969,7 @@ JL_DLLEXPORT size_t jl_maxrss(void);
 //TODO: utilize https://github.com/openssl/openssl/blob/master/crypto/rand/rand_uniform.c#L13-L99
 // for better performance, it does however require making users expect a 32bit random number.
 
+/* cong：同余随机数生成器，在线程局部使用（开区间 [0, max)） */
 STATIC_INLINE uint64_t cong(uint64_t max, uint64_t *seed) JL_NOTSAFEPOINT // Open interval [0, max)
 {
     if (max < 2)
@@ -1760,10 +1997,13 @@ STATIC_INLINE uint64_t cong(uint64_t max, uint64_t *seed) JL_NOTSAFEPOINT // Ope
     } while (1);
 }
 
+/* Julia 级随机数接口 */
 JL_DLLEXPORT uint64_t jl_rand(void) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_srand(uint64_t) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_init_rand(void);
 
+/* ======= 动态库句柄 ======= */
+/* 可执行文件和 Julia 库的句柄 */
 JL_DLLEXPORT extern void *jl_exe_handle;
 JL_DLLEXPORT extern void *jl_libjulia_handle;
 JL_DLLEXPORT extern void *jl_libjulia_internal_handle;
@@ -1791,44 +2031,54 @@ JL_DLLEXPORT void *jl_get_abi_converter(jl_task_t *ct, void *data);
 JL_DLLIMPORT void *jl_jit_abi_converter(jl_task_t *ct, jl_abi_t from_abi, jl_code_instance_t *codeinst);
 
 
-// Special filenames used to refer to internal julia libraries
+/* 内部 Julia 库的特殊文件名（使用指针编码避免字符串分配） */
 #define JL_EXE_LIBNAME                  ((const char*)1)
 #define JL_LIBJULIA_DL_LIBNAME          ((const char*)2)
 #define JL_LIBJULIA_INTERNAL_DL_LIBNAME ((const char*)3)
 JL_DLLEXPORT const char *jl_dlfind(const char *name);
 
+/* ======= 运行时内联函数 (intrinsics) ======= */
 // -- Runtime intrinsics -- //
+/* 获取内联函数名和参数数量 */
 JL_DLLEXPORT const char *jl_intrinsic_name(int f) JL_NOTSAFEPOINT;
 JL_DLLEXPORT unsigned jl_intrinsic_nargs(int f) JL_NOTSAFEPOINT;
 
+/* 检查是否为有效的内联函数元素指针类型 */
 STATIC_INLINE int is_valid_intrinsic_elptr(jl_value_t *ety)
 {
     return ety == (jl_value_t*)jl_any_type || (jl_is_concrete_type(ety) && !jl_is_layout_opaque(((jl_datatype_t*)ety)->layout) && !jl_is_array_type(ety));
 }
+/* ======= 位转换与指针操作 ======= */
 JL_DLLEXPORT jl_value_t *jl_bitcast(jl_value_t *ty, jl_value_t *v);
+/* 指针读写 */
 JL_DLLEXPORT jl_value_t *jl_pointerref(jl_value_t *p, jl_value_t *i, jl_value_t *align);
 JL_DLLEXPORT jl_value_t *jl_pointerset(jl_value_t *p, jl_value_t *x, jl_value_t *align, jl_value_t *i);
+/* ======= 原子操作 ======= */
 JL_DLLEXPORT jl_value_t *jl_atomic_fence(jl_value_t *order, jl_value_t *syncscope);
 JL_DLLEXPORT jl_value_t *jl_atomic_pointerref(jl_value_t *p, jl_value_t *order);
 JL_DLLEXPORT jl_value_t *jl_atomic_pointerset(jl_value_t *p, jl_value_t *x, jl_value_t *order);
 JL_DLLEXPORT jl_value_t *jl_atomic_pointerswap(jl_value_t *p, jl_value_t *x, jl_value_t *order);
 JL_DLLEXPORT jl_value_t *jl_atomic_pointermodify(jl_value_t *p, jl_value_t *f, jl_value_t *x, jl_value_t *order);
 JL_DLLEXPORT jl_value_t *jl_atomic_pointerreplace(jl_value_t *p, jl_value_t *x, jl_value_t *expected, jl_value_t *success_order, jl_value_t *failure_order);
+/* ======= C 全局变量操作 ======= */
 JL_DLLEXPORT jl_value_t *jl_cglobal(jl_value_t *v, jl_value_t *ty);
 JL_DLLEXPORT jl_value_t *jl_cglobal_auto(jl_value_t *v);
 
+/* ======= 整数算术运算 ======= */
 JL_DLLEXPORT jl_value_t *jl_neg_int(jl_value_t *a);
 JL_DLLEXPORT jl_value_t *jl_add_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_sub_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_mul_int(jl_value_t *a, jl_value_t *b);
-JL_DLLEXPORT jl_value_t *jl_sdiv_int(jl_value_t *a, jl_value_t *b);
-JL_DLLEXPORT jl_value_t *jl_udiv_int(jl_value_t *a, jl_value_t *b);
-JL_DLLEXPORT jl_value_t *jl_srem_int(jl_value_t *a, jl_value_t *b);
-JL_DLLEXPORT jl_value_t *jl_urem_int(jl_value_t *a, jl_value_t *b);
+JL_DLLEXPORT jl_value_t *jl_sdiv_int(jl_value_t *a, jl_value_t *b);  // 有符号除法
+JL_DLLEXPORT jl_value_t *jl_udiv_int(jl_value_t *a, jl_value_t *b);  // 无符号除法
+JL_DLLEXPORT jl_value_t *jl_srem_int(jl_value_t *a, jl_value_t *b);  // 有符号取余
+JL_DLLEXPORT jl_value_t *jl_urem_int(jl_value_t *a, jl_value_t *b);  // 无符号取余
 
+/* ======= 指针算术运算 ======= */
 JL_DLLEXPORT jl_value_t *jl_add_ptr(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_sub_ptr(jl_value_t *a, jl_value_t *b);
 
+/* ======= 浮点算术运算 ======= */
 JL_DLLEXPORT jl_value_t *jl_neg_float(jl_value_t *a);
 JL_DLLEXPORT jl_value_t *jl_add_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_sub_float(jl_value_t *a, jl_value_t *b);
@@ -1839,6 +2089,7 @@ JL_DLLEXPORT jl_value_t *jl_max_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_fma_float(jl_value_t *a, jl_value_t *b, jl_value_t *c);
 JL_DLLEXPORT jl_value_t *jl_muladd_float(jl_value_t *a, jl_value_t *b, jl_value_t *c);
 
+/* ======= 整数比较 ======= */
 JL_DLLEXPORT jl_value_t *jl_eq_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_ne_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_slt_int(jl_value_t *a, jl_value_t *b);
@@ -1846,35 +2097,40 @@ JL_DLLEXPORT jl_value_t *jl_ult_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_sle_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_ule_int(jl_value_t *a, jl_value_t *b);
 
+/* ======= 浮点比较 ======= */
 JL_DLLEXPORT jl_value_t *jl_eq_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_ne_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_lt_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_le_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_fpiseq(jl_value_t *a, jl_value_t *b);
 
+/* ======= 位运算 ======= */
 JL_DLLEXPORT jl_value_t *jl_not_int(jl_value_t *a);
 JL_DLLEXPORT jl_value_t *jl_and_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_or_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_xor_int(jl_value_t *a, jl_value_t *b);
-JL_DLLEXPORT jl_value_t *jl_shl_int(jl_value_t *a, jl_value_t *b);
-JL_DLLEXPORT jl_value_t *jl_lshr_int(jl_value_t *a, jl_value_t *b);
-JL_DLLEXPORT jl_value_t *jl_ashr_int(jl_value_t *a, jl_value_t *b);
-JL_DLLEXPORT jl_value_t *jl_bswap_int(jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_ctpop_int(jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_ctlz_int(jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_cttz_int(jl_value_t *a);
+JL_DLLEXPORT jl_value_t *jl_shl_int(jl_value_t *a, jl_value_t *b);   // 左移
+JL_DLLEXPORT jl_value_t *jl_lshr_int(jl_value_t *a, jl_value_t *b);  // 逻辑右移
+JL_DLLEXPORT jl_value_t *jl_ashr_int(jl_value_t *a, jl_value_t *b);  // 算术右移
+JL_DLLEXPORT jl_value_t *jl_bswap_int(jl_value_t *a);                // 字节交换
+JL_DLLEXPORT jl_value_t *jl_ctpop_int(jl_value_t *a);                // 人口计数
+JL_DLLEXPORT jl_value_t *jl_ctlz_int(jl_value_t *a);                 // 前导零
+JL_DLLEXPORT jl_value_t *jl_cttz_int(jl_value_t *a);                 // 末尾零
 
-JL_DLLEXPORT jl_value_t *jl_sext_int(jl_value_t *ty, jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_zext_int(jl_value_t *ty, jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_trunc_int(jl_value_t *ty, jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_sitofp(jl_value_t *ty, jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_uitofp(jl_value_t *ty, jl_value_t *a);
+/* ======= 类型转换 ======= */
+JL_DLLEXPORT jl_value_t *jl_sext_int(jl_value_t *ty, jl_value_t *a);  // 有符号扩展
+JL_DLLEXPORT jl_value_t *jl_zext_int(jl_value_t *ty, jl_value_t *a);  // 零扩展
+JL_DLLEXPORT jl_value_t *jl_trunc_int(jl_value_t *ty, jl_value_t *a); // 截断
+JL_DLLEXPORT jl_value_t *jl_sitofp(jl_value_t *ty, jl_value_t *a);    // 有符号整数转浮点
+JL_DLLEXPORT jl_value_t *jl_uitofp(jl_value_t *ty, jl_value_t *a);    // 无符号整数转浮点
 
-JL_DLLEXPORT jl_value_t *jl_fptoui(jl_value_t *ty, jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_fptosi(jl_value_t *ty, jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_fptrunc(jl_value_t *ty, jl_value_t *a);
-JL_DLLEXPORT jl_value_t *jl_fpext(jl_value_t *ty, jl_value_t *a);
+/* ======= 浮点类型转换 ======= */
+JL_DLLEXPORT jl_value_t *jl_fptoui(jl_value_t *ty, jl_value_t *a);    // 浮点转无符号整数
+JL_DLLEXPORT jl_value_t *jl_fptosi(jl_value_t *ty, jl_value_t *a);    // 浮点转有符号整数
+JL_DLLEXPORT jl_value_t *jl_fptrunc(jl_value_t *ty, jl_value_t *a);   // 浮点精度降低
+JL_DLLEXPORT jl_value_t *jl_fpext(jl_value_t *ty, jl_value_t *a);     // 浮点精度提升
 
+/* ======= 检查算术运算（溢出检查） ======= */
 JL_DLLEXPORT jl_value_t *jl_checked_sadd_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_checked_uadd_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_checked_ssub_int(jl_value_t *a, jl_value_t *b);
@@ -1886,6 +2142,7 @@ JL_DLLEXPORT jl_value_t *jl_checked_udiv_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_checked_srem_int(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_checked_urem_int(jl_value_t *a, jl_value_t *b);
 
+/* ======= LLVM 数学函数 ======= */
 JL_DLLEXPORT jl_value_t *jl_ceil_llvm(jl_value_t *a);
 JL_DLLEXPORT jl_value_t *jl_floor_llvm(jl_value_t *a);
 JL_DLLEXPORT jl_value_t *jl_trunc_llvm(jl_value_t *a);
@@ -1896,12 +2153,14 @@ JL_DLLEXPORT jl_value_t *jl_abs_float(jl_value_t *a);
 JL_DLLEXPORT jl_value_t *jl_copysign_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_flipsign_int(jl_value_t *a, jl_value_t *b);
 
+/* ======= 杂项运行时函数 ======= */
 JL_DLLEXPORT jl_value_t *jl_have_fma(jl_value_t *a);
 JL_DLLEXPORT int jl_stored_inline(jl_value_t *el_type);
 JL_DLLEXPORT jl_value_t *(jl_array_data_owner)(jl_array_t *a);
 JL_DLLEXPORT jl_array_t *jl_array_copy(jl_array_t *ary);
 JL_DLLEXPORT jl_genericmemory_t *jl_genericmemory_copy(jl_genericmemory_t *mem);
 
+/* 对象 ID 与任务调度 */
 JL_DLLEXPORT uintptr_t jl_object_id_(uintptr_t tv, jl_value_t *v) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_set_next_task(jl_task_t *task) JL_NOTSAFEPOINT;
 
@@ -1909,13 +2168,16 @@ JL_DLLEXPORT uint16_t julia_double_to_half(double param) JL_NOTSAFEPOINT;
 JL_DLLEXPORT uint16_t julia_float_to_half(float param) JL_NOTSAFEPOINT;
 JL_DLLEXPORT float julia_half_to_float(uint16_t param) JL_NOTSAFEPOINT;
 
+/* ======= 同步工具 ======= */
 // -- synchronization utilities -- //
 
-extern jl_mutex_t typecache_lock;
-extern jl_mutex_t world_counter_lock;
+extern jl_mutex_t typecache_lock;      // 类型缓存锁
+extern jl_mutex_t world_counter_lock;  // 世界计数器锁
 
+/* ======= SmallIntSet (小整数集合) ======= */
 // -- smallintset.c -- //
 
+/* SmallIntSet 回调类型：哈希和相等比较 */
 typedef uint_t (*smallintset_hash)(size_t val, jl_value_t *data);
 typedef int (*smallintset_eq)(size_t val, const void *key, jl_value_t *data, uint_t hv);
 ssize_t jl_smallintset_lookup(jl_genericmemory_t *cache, smallintset_eq eq, const void *key, jl_value_t *data, uint_t hv, int pop);
@@ -1930,20 +2192,23 @@ JL_DLLEXPORT jl_genericmemory_t *jl_idset_put_key(jl_genericmemory_t *keys, jl_v
 JL_DLLEXPORT jl_genericmemory_t *jl_idset_put_idx(jl_genericmemory_t *keys, jl_genericmemory_t *idxs, ssize_t idx);
 JL_DLLEXPORT ssize_t jl_idset_pop(jl_genericmemory_t *keys, jl_genericmemory_t *idxs, jl_value_t *key) JL_NOTSAFEPOINT;
 
+/* ======= 类型映射 (typemap) ======= */
 // -- typemap.c -- //
 
+/* 向类型映射缓存中插入新条目 */
 void jl_typemap_insert(_Atomic(jl_typemap_t*) *cache, jl_value_t *parent,
         jl_typemap_entry_t *newrec, int8_t offs);
 jl_typemap_entry_t *jl_typemap_alloc(
         jl_tupletype_t *type, jl_tupletype_t *simpletype, jl_svec_t *guardsigs,
         jl_value_t *newvalue, size_t min_world, size_t max_world);
 
+/* jl_typemap_assoc：类型映射关联搜索的输入/输出结构 */
 struct jl_typemap_assoc {
     // inputs
-    jl_value_t *const types;
-    size_t const world;
+    jl_value_t *const types;   // 输入类型
+    size_t const world;        // 世界年龄
     // outputs
-    jl_svec_t *env; // subtype env (initialize to null to perform intersection without an environment)
+    jl_svec_t *env;            // 子类型环境（初始化为 NULL 进行无环境交集）
 };
 
 jl_typemap_entry_t *jl_typemap_assoc_by_type(
@@ -1968,31 +2233,37 @@ STATIC_INLINE jl_typemap_entry_t *jl_typemap_assoc_exact(
     }
     return NULL;
 }
+/* 类型映射访问器回调类型 */
 typedef int (*jl_typemap_visitor_fptr)(jl_typemap_entry_t *l, void *closure);
+/* 遍历类型映射 */
 int jl_typemap_visitor(jl_typemap_t *a, jl_typemap_visitor_fptr fptr, void *closure);
 
 struct typemap_intersection_env;
+/* 类型映射交集访问器回调类型 */
 typedef int (*jl_typemap_intersection_visitor_fptr)(jl_typemap_entry_t *l, struct typemap_intersection_env *closure);
+/* typemap_intersection_env：类型映射交集访问的输入/输出结构 */
 struct typemap_intersection_env {
     // input values
-    jl_typemap_intersection_visitor_fptr const fptr; // fptr to call on a match
-    jl_value_t *const type; // type to match
-    jl_value_t *const va; // the tparam0 for the vararg in type, if applicable (or NULL)
+    jl_typemap_intersection_visitor_fptr const fptr; // 匹配时调用的回调
+    jl_value_t *const type;                          // 要匹配的类型
+    jl_value_t *const va;                            // vararg 的 tparam0（如有）
     size_t search_slurp;
     // output values
     size_t min_valid;
     size_t max_valid;
-    jl_value_t *ti; // intersection type
-    jl_svec_t *env; // intersection env (initialize to null to perform intersection without an environment)
-    int issubty;    // if `a <: b` is true in `intersect(a,b)`
+    jl_value_t *ti;       // 交集类型
+    jl_svec_t *env;       // 交集环境（初始化为 NULL 进行无环境交集）
+    int issubty;          // 如果 intersect(a,b) 中 a <: b 为真
 };
 int jl_typemap_intersection_visitor(jl_typemap_t *a, int offs, struct typemap_intersection_env *closure);
 void typemap_slurp_search(jl_typemap_entry_t *ml, struct typemap_intersection_env *closure);
 
+/* ======= 简单向量操作 ======= */
 // -- simplevector.c -- //
 
 // check whether the specified number of arguments is compatible with the
 // specified number of parameters of the tuple type
+/* 检查参数数量是否与元组类型的参数数量兼容 */
 JL_DLLEXPORT int jl_tupletype_length_compat(jl_value_t *v, size_t nargs) JL_NOTSAFEPOINT;
 
 JL_DLLEXPORT jl_value_t *jl_argtype_with_function(jl_value_t *f, jl_value_t *types0);
@@ -2026,6 +2297,7 @@ void jl_log(int level, jl_value_t *module, jl_value_t *group, jl_value_t *id,
 
 JL_DLLEXPORT int jl_isabspath(const char *in) JL_NOTSAFEPOINT;
 
+/* ======= 常用符号表 (jl_sym_t*) ======= */
 // Commonly used symbols (jl_sym_t* values)
 #define JL_COMMON_SYMBOLS(XX) \
     XX(acquire_release_sym) \
@@ -2131,19 +2403,23 @@ JL_DLLEXPORT int jl_isabspath(const char *in) JL_NOTSAFEPOINT;
 JL_COMMON_SYMBOLS(XX)
 #undef XX
 
+/* ======= 原子内存序与符号 ======= */
+/* 从 Julia 符号获取内存序枚举 */
 JL_DLLEXPORT enum jl_memory_order jl_get_atomic_order(jl_sym_t *order, char loading, char storing);
 JL_DLLEXPORT enum jl_memory_order jl_get_atomic_order_checked(jl_sym_t *order, char loading, char storing);
 
 struct _jl_image_fptrs_t;
 
+/* ======= 覆盖率与 malloc 日志 ======= */
 void jl_init_coverage(void);
 void jl_write_malloc_log(void);
 JL_DLLEXPORT void jl_write_coverage_data(const char*);
 
+/* 符号表锁和符号创建 */
 extern uv_mutex_t symtab_lock;
 jl_sym_t *_jl_symbol(const char *str, size_t len) JL_NOTSAFEPOINT;
 
-// Tools for locally disabling spurious compiler warnings
+/* ======= 编译器警告抑制工具 ======= */
 //
 // Particular calls which are used elsewhere in the code include:
 //
@@ -2151,6 +2427,7 @@ jl_sym_t *_jl_symbol(const char *str, size_t len) JL_NOTSAFEPOINT;
 //   are used inside a JL_TRY as being "clobbered" if JL_CATCH is entered. This
 //   warning is spurious if the variable is not modified inside the JL_TRY.
 //   See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=65041
+/* JL_DO_PRAGMA：编译器 pragma 宏包装 */
 #define JL_DO_PRAGMA(s) _Pragma(#s)
 #ifdef _COMPILER_GCC_
 #define JL_GCC_IGNORE_START(warning) \
@@ -2181,6 +2458,7 @@ jl_sym_t *_jl_symbol(const char *str, size_t len) JL_NOTSAFEPOINT;
     JL_GCC_IGNORE_STOP \
     JL_CLANG_IGNORE_STOP
 
+/* JL_GC_ASSERT_LIVE：断言值在 GC 分析器中存活（仅 clang-gcanalyzer 有效） */
 #ifdef __clang_gcanalyzer__
   // Not a safepoint (so it doesn't free other values), but an artificial use.
   // Usually this is unnecessary because the analyzer can see all real uses,
@@ -2191,50 +2469,77 @@ jl_sym_t *_jl_symbol(const char *str, size_t len) JL_NOTSAFEPOINT;
   #define JL_GC_ASSERT_LIVE(x) (void)(x)
 #endif
 
+/* CRC32C 校验和 */
 JL_DLLEXPORT uint32_t jl_crc32c(uint32_t crc, const char *buf, size_t len);
 
+/* ======= 代码生成 (codegen) 导出 ======= */
 // -- exports from codegen -- //
 
+/* IR 标志：@inbounds 属性 */
 #define IR_FLAG_INBOUNDS 0x01
 
+/* 为非特化方法生成函数指针 */
 JL_DLLIMPORT void jl_generate_fptr_for_unspecialized(jl_code_instance_t *unspec);
+/* 编译单个 CodeInstance */
 JL_DLLIMPORT int jl_compile_codeinst(jl_code_instance_t *unspec);
+/* 批量将 CodeInstances 发射到 JIT */
 JL_DLLIMPORT void jl_emit_codeinsts_to_jit(jl_code_instance_t **codeinsts, jl_code_info_t **srcs, int len);
 
+/* jl_llvmf_dump_t：LLVM 函数转储结构，包含线程安全模块和函数引用 */
 typedef struct {
-    LLVMOrcThreadSafeModuleRef TSM;
-    LLVMValueRef F;
+    LLVMOrcThreadSafeModuleRef TSM;  // 线程安全模块引用
+    LLVMValueRef F;                  // LLVM 函数值
     char *pass_output;  // LLVM pass instrumentation output (freed by jl_dump_function_ir or jl_dump_function_asm)
 } jl_llvmf_dump_t;
 
+/* ======= 反汇编与 IR 转储 ======= */
+/* 转储方法的汇编代码 */
 JL_DLLIMPORT jl_value_t *jl_dump_method_asm(jl_method_instance_t *linfo, size_t world,
         char emit_mc, char getwrapper, const char* asm_variant, const char *debuginfo, char binary);
+/* 获取 LLVM 函数定义 */
 JL_DLLIMPORT void jl_get_llvmf_defn(jl_llvmf_dump_t* dump, jl_method_instance_t *linfo, jl_code_info_t *src, char getwrapper, char optimize, const char *llvm_options, const jl_cgparams_t params);
+/* 转储函数指针的汇编 */
 JL_DLLIMPORT jl_value_t *jl_dump_fptr_asm(uint64_t fptr, char emit_mc, const char* asm_variant, const char *debuginfo, char binary);
+/* 转储函数 IR */
 JL_DLLIMPORT jl_value_t *jl_dump_function_ir(jl_llvmf_dump_t *dump, char strip_ir_metadata, char dump_module, const char *debuginfo);
+/* 转储函数汇编 */
 JL_DLLIMPORT jl_value_t *jl_dump_function_asm(jl_llvmf_dump_t *dump, char emit_mc, const char* asm_variant, const char *debuginfo, char binary, char raw);
 
+/* ======= 原生代码生成 ======= */
+/* CodeInstance 查找回调类型 */
 typedef jl_value_t *(*jl_codeinstance_lookup_t)(jl_method_instance_t *mi JL_PROPAGATES_ROOT, size_t min_world, size_t max_world);
+/* 创建原生代码（预编译输出） */
 JL_DLLIMPORT void *jl_create_native(LLVMOrcThreadSafeModuleRef llvmmod, int trim, int cache, size_t world, jl_array_t *mod_array, jl_array_t *worklist, int all, jl_array_t *module_init_order, jl_array_t *ext_foreign_cis);
+/* 发射原生代码到 JIT */
 JL_DLLIMPORT void *jl_emit_native(jl_array_t *codeinfos, LLVMOrcThreadSafeModuleRef llvmmod, const jl_cgparams_t *cgparams, int _external_linkage);
+/* 转储原生代码到文件 */
 JL_DLLIMPORT void jl_dump_native(void *native_code,
         const char *bc_fname, const char *unopt_bc_fname, const char *obj_fname, const char *asm_fname,
         ios_t *z, ios_t *s, jl_emission_params_t *params);
+/* 查询 LLVM 全局变量及其初始值 */
 JL_DLLIMPORT void jl_get_llvm_gvs(void *native_code, size_t *num_els, void **gvs);
 JL_DLLIMPORT void jl_get_llvm_gv_inits(void *native_code, size_t *num_els, void **inits);
+/* 查询 LLVM 外部函数引用 */
 JL_DLLIMPORT void jl_get_llvm_external_fns(void *native_code, size_t *num_els,
                                            jl_code_instance_t *fns);
+/* 获取函数 ID */
 JL_DLLIMPORT void jl_get_function_id(void *native_code, jl_code_instance_t *ncode,
         int32_t *func_idx, int32_t *specfunc_idx);
+/* 注册函数指针（预编译映像加载时） */
 JL_DLLIMPORT void jl_register_fptrs(uint64_t image_base, const struct _jl_image_fptrs_t *fptrs,
                                     jl_code_instance_t **linfos, size_t n);
+/* 查询 CodeInstances */
 JL_DLLIMPORT void jl_get_llvm_cis(void *native_code, size_t *num_els,
                                   jl_code_instance_t **CIs);
+/* 初始化/反初始化代码生成 */
 JL_DLLIMPORT void jl_init_codegen(void);
 JL_DLLIMPORT void jl_teardown_codegen(void) JL_NOTSAFEPOINT;
+/* 从指令指针获取函数信息 */
 JL_DLLIMPORT int jl_getFunctionInfo(jl_frame_t **frames, uintptr_t pointer, int skipC, int noInline) JL_NOTSAFEPOINT;
 // n.b. this might be called from unmanaged thread:
+/* 获取展开信息（可能从未管理线程调用） */
 JL_DLLIMPORT uint64_t jl_getUnwindInfo(uint64_t dwBase);
+/* 注册/注销 CodeInstance 到 JIT */
 JL_DLLIMPORT void jl_jit_register_ci(jl_code_instance_t *ci) JL_NOTSAFEPOINT;
 JL_DLLIMPORT void jl_jit_unregister_ci(jl_code_instance_t *ci) JL_NOTSAFEPOINT;
 
@@ -2245,6 +2550,7 @@ JL_DLLIMPORT void jl_jit_unregister_ci(jl_code_instance_t *ci) JL_NOTSAFEPOINT;
 #pragma GCC visibility pop
 
 
+/* ======= DTrace/SystemTap 动态探针 ======= */
 #ifdef USE_DTRACE
 // Generated file, needs to be searched in include paths so that the builddir
 // retains priority
@@ -2263,6 +2569,7 @@ JL_DLLIMPORT void jl_jit_unregister_ci(jl_code_instance_t *ci) JL_NOTSAFEPOINT;
 
 #else
 // define a dummy version of the probe functions
+/* GC 探针（无 DTrace 时为空操作） */
 #define JL_PROBE_GC_BEGIN(collection) do ; while (0)
 #define JL_PROBE_GC_STOP_THE_WORLD() do ; while (0)
 #define JL_PROBE_GC_MARK_BEGIN() do ; while (0)
@@ -2271,6 +2578,7 @@ JL_DLLIMPORT void jl_jit_unregister_ci(jl_code_instance_t *ci) JL_NOTSAFEPOINT;
 #define JL_PROBE_GC_SWEEP_END() do ; while (0)
 #define JL_PROBE_GC_END() do ; while (0)
 #define JL_PROBE_GC_FINALIZER() do ; while (0)
+/* 运行时任务调度探针 */
 #define JL_PROBE_RT_RUN_TASK(task) do ; while (0)
 #define JL_PROBE_RT_PAUSE_TASK(task) do ; while (0)
 #define JL_PROBE_RT_NEW_TASK(parent, child) do ; while (0)
@@ -2287,6 +2595,7 @@ JL_DLLIMPORT void jl_jit_unregister_ci(jl_code_instance_t *ci) JL_NOTSAFEPOINT;
 #define JL_PROBE_RT_SLEEP_CHECK_TASK_WAKE(ptls) do ; while (0)
 #define JL_PROBE_RT_SLEEP_CHECK_UV_WAKE(ptls) do ; while (0)
 
+/* 探针启用检查宏（无 DTrace 时始终返回 false） */
 #define JL_PROBE_GC_BEGIN_ENABLED() (0)
 #define JL_PROBE_GC_STOP_THE_WORLD_ENABLED() (0)
 #define JL_PROBE_GC_MARK_BEGIN_ENABLED() (0)
