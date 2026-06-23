@@ -1778,6 +1778,57 @@ JL_DLLEXPORT void jl_m(void *jl_value) JL_NOTSAFEPOINT
     } else {
         jl_printf(s, "  Type tag (small): %lu\n", (unsigned long)typetag);
     }
+
+    if (jl_is_symbol(v)) {
+        jl_sym_t *sym = (jl_sym_t*)v;
+        jl_printf(s, "  Symbol: \"%s\"\n", jl_symbol_name(sym));
+        jl_printf(s, "    hash=0x%lx\n", (unsigned long)sym->hash);
+        jl_sym_t *l = jl_atomic_load_relaxed(&sym->left);
+        jl_sym_t *r = jl_atomic_load_relaxed(&sym->right);
+        jl_printf(s, "    left=");
+        if (l) { jl_static_show(s, (jl_value_t*)l); jl_printf(s, "\n"); }
+        else   { jl_printf(s, "(nil)\n"); }
+        jl_printf(s, "    right=");
+        if (r) { jl_static_show(s, (jl_value_t*)r); jl_printf(s, "\n"); }
+        else   { jl_printf(s, "(nil)\n"); }
+    }
+    else if (jl_is_expr(v)) {
+        jl_expr_t *ex = (jl_expr_t*)v;
+        jl_printf(s, "  Expr:\n    head=");
+        jl_static_show(s, (jl_value_t*)ex->head);
+        jl_printf(s, "\n    nargs=%td\n", (ptrdiff_t)jl_expr_nargs(v));
+        size_t nargs = (size_t)jl_expr_nargs(v);
+        for (size_t i = 0; i < nargs; i++) {
+            jl_value_t *arg = jl_exprarg(v, i);
+            jl_printf(s, "    args[%zu]=", i);
+            jl_static_show(s, arg);
+            jl_printf(s, "\n");
+        }
+    }
+    else if (jl_is_code_info(v)) {
+        jl_code_info_t *ci = (jl_code_info_t*)v;
+        jl_printf(s, "  CodeInfo:\n    code=");
+        jl_static_show(s, (jl_value_t*)ci->code);
+        jl_printf(s, "\n    ssavaluetypes=");
+        jl_static_show(s, ci->ssavaluetypes);
+        jl_printf(s, "\n    slotnames=");
+        jl_static_show(s, (jl_value_t*)ci->slotnames);
+        jl_printf(s, "\n    rettype=");
+        jl_static_show(s, ci->rettype);
+        jl_printf(s, "\n    parent=");
+        jl_static_show(s, (jl_value_t*)ci->parent);
+        jl_printf(s, "\n    edges=");
+        jl_static_show(s, ci->edges);
+        jl_printf(s, "\n    nargs=%zu, min_world=%zu, max_world=%zu\n",
+                  (size_t)ci->nargs, ci->min_world, ci->max_world);
+        jl_printf(s, "    flags: propagate_inbounds=%u, has_fcall=%u,\n",
+                  (unsigned)ci->propagate_inbounds, (unsigned)ci->has_fcall);
+        jl_printf(s, "           has_image_globalref=%u, nospecializeinfer=%u,\n",
+                  (unsigned)ci->has_image_globalref, (unsigned)ci->nospecializeinfer);
+        jl_printf(s, "           isva=%u, inlining=%u, constprop=%u, purity=%d\n",
+                   (unsigned)ci->isva, (unsigned)ci->inlining,
+                  (unsigned)ci->constprop, (unsigned)ci->purity.bits);
+    }
 }
 
 JL_DLLEXPORT void jl_breakpoint(jl_value_t *v)
