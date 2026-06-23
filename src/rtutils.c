@@ -1711,6 +1711,75 @@ JL_DLLEXPORT void jl__(void *jl_value) JL_NOTSAFEPOINT
     jl_safe_static_show_((JL_STREAM*)STDERR_FILENO, (jl_value_t*)jl_value, ctx);
 }
 
+// print memory layout and type info of a jl_value_t (for debugging)
+JL_DLLEXPORT void jl_m(void *jl_value) JL_NOTSAFEPOINT
+{
+    jl_value_t *v = (jl_value_t*)jl_value;
+    JL_STREAM *s = (JL_STREAM*)STDERR_FILENO;
+
+    jl_printf(s, "jl_m(%p): ", (void*)v);
+    if (v == NULL) {
+        jl_printf(s, "NULL\n");
+        return;
+    }
+
+    {
+        jl_static_show_config_t ctx = { /* verbosity */ JL_STATIC_SHOW_VERBOSITY_DEFAULT };
+        jl_safe_static_show_(s, v, ctx);
+    }
+
+    jl_taggedvalue_t *tag = jl_astaggedvalue(v);
+    uintptr_t header = tag->header;
+    unsigned gc = (unsigned)(header & 3);
+    unsigned in_image = (unsigned)((header >> 2) & 3);
+    uintptr_t typetag = header & ~(uintptr_t)15;
+
+    jl_printf(s, "  TaggedValue @ %p: header=0x%p",
+              (void*)tag, (void*)header);
+    jl_printf(s, " (gc=%u, in_image=%u, type=0x%p)\n",
+              gc, in_image, (void*)typetag);
+
+    jl_value_t *tv_type = jl_typeof(v);
+    jl_printf(s, "  Type: ");
+    jl_static_show(s, tv_type);
+    jl_printf(s, "\n");
+
+    if (jl_is_datatype(tv_type)) {
+        jl_datatype_t *dt = (jl_datatype_t*)tv_type;
+        const jl_datatype_layout_t *layout = jl_datatype_layout(dt);
+        if (layout) {
+            jl_printf(s, "  Layout: size=%u, nfields=%u, align=%u, nptrs=%u, haspad=%u\n",
+                      layout->size, layout->nfields, layout->alignment,
+                      layout->npointers, (unsigned)layout->flags.haspadding);
+
+            size_t total = sizeof(jl_taggedvalue_t) + layout->size;
+            unsigned char *bytes = (unsigned char*)tag;
+            jl_printf(s, "  Raw [%zu bytes]:\n", total);
+            for (size_t i = 0; i < total; i += 16) {
+                jl_printf(s, "    %04zu:", i);
+                for (size_t j = 0; j < 16 && i + j < total; j++) {
+                    if (j % 8 == 0) jl_printf(s, " ");
+                    jl_printf(s, " %02x", (unsigned)bytes[i + j]);
+                }
+                for (size_t j = total - i; j < 16; j++) {
+                    if (j % 8 == 0) jl_printf(s, " ");
+                    jl_printf(s, "   ");
+                }
+                jl_printf(s, "  |");
+                for (size_t j = 0; j < 16 && i + j < total; j++) {
+                    char c = (char)bytes[i + j];
+                    jl_printf(s, "%c", (c >= 32 && c < 127) ? c : '.');
+                }
+                jl_printf(s, "|\n");
+            }
+        } else {
+            jl_printf(s, "  Layout: NULL (opaque)\n");
+        }
+    } else {
+        jl_printf(s, "  Type tag (small): %lu\n", (unsigned long)typetag);
+    }
+}
+
 JL_DLLEXPORT void jl_breakpoint(jl_value_t *v)
 {
     // put a breakpoint in your debugger here

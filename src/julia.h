@@ -3073,6 +3073,9 @@ JL_DLLEXPORT void jlbacktrace(void) JL_NOTSAFEPOINT; // deprecated
 JL_DLLEXPORT void jl_(void *jl_value) JL_NOTSAFEPOINT;
 // Mainly for debugging, a high-verbosity version of `jl_`
 JL_DLLEXPORT void jl__(void *jl_value) JL_NOTSAFEPOINT;
+// Mainly for debugging, print memory layout and type info of a jl_value_t
+// 打印 jl_value_t 的内存布局和类型信息（用于调试）
+JL_DLLEXPORT void jl_m(void *jl_value) JL_NOTSAFEPOINT;
 
 /* ======= Julia 选项 ======= */
 // julia options -----------------------------------------------------------
