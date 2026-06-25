@@ -83,7 +83,8 @@ static const short builtin_arg_counts[] =
       ANYARGS, -1, ANYARGS, -1, 2,  2, 2, 2,
       ANYARGS, 2, 3 };
 
-#ifdef NDEBUG
+// #ifdef NDEBUG
+#if 1
 #define PUSH(fl_ctx, v) (fl_ctx->Stack[fl_ctx->SP++] = (v))
 #define POP(fl_ctx)     (fl_ctx->Stack[--fl_ctx->SP])
 #define POPN(fl_ctx, n) (fl_ctx->SP-=(n))
