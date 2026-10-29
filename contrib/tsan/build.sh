@@ -9,8 +9,7 @@
 # TSAN-enabled julia in <path>/tsan.  Required toolss are install under
 # <path>/toolchain.  Note that the same <path> passed to `contrib/asan/build.sh`
 # can be used to share the toolchain used for ASAN.  This scripts also takes
-# optional <make_targets> arguments which are passed to `make`.  The default
-# make target is `debug`.
+# optional <make_targets> arguments which are passed to `make`.
 
 set -ue
 set -x
@@ -72,4 +71,15 @@ fi
 cd "$BUILD"  # so that we can pass `-C src` to `make`
 # Reporting tsan warnings will interfere with bootstrapping.
 export TSAN_OPTIONS="report_bugs=0 exitcode=0"
+
+# build sysimg with bootstrapping
+SYSIMG_TARGET=julia-sysimg-release
+for target in "$@"; do
+    if [ "$target" = debug ]; then
+        SYSIMG_TARGET=julia-sysimg-debug
+        break
+    fi
+done
+CROSS_BOOTSTRAP_JULIA=$BUILD/../bootstrap/usr/bin/julia CROSS_BOOTSTRAP_SYSBASE=$BUILD/../bootstrap/usr/lib/julia/sysbase make -j "$JOBS" "$SYSIMG_TARGET"
+
 make -j "$JOBS" "$@"

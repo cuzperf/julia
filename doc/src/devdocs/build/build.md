@@ -320,7 +320,7 @@ quicker by bootstrapping from a release build:
 
 ```sh
 $ make julia-src-release julia-sysbase-release
-$ make julia-sysimg-debug CROSS_BOOTSTRAP_JULIA=$PWD/usr/bin/julia CROSS_BOOTSTRAP_SYSBASE=$PWD/usr/lib/julia/sysbase.so
+$ make julia-sysimg-debug CROSS_BOOTSTRAP_JULIA=$PWD/usr/bin/julia CROSS_BOOTSTRAP_SYSBASE=$PWD/usr/lib/julia/sysbase
 ```
 
 ## Building 32-bit Julia on a 64-bit machine

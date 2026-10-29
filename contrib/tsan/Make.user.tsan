@@ -2,6 +2,9 @@ TOOLCHAIN=$(BUILDROOT)/../toolchain
 BINDIR=$(TOOLCHAIN)/usr/bin
 TOOLDIR=$(TOOLCHAIN)/usr/tools
 
+# disable ccache to fix the CC and CXX override issue.
+override USECCACHE := 0
+
 # use our new toolchain
 override CC=$(TOOLDIR)/clang
 override CXX=$(TOOLDIR)/clang++
@@ -10,5 +13,3 @@ USE_BINARYBUILDER_LLVM=1
 
 override SANITIZE=1
 override SANITIZE_THREAD=1
-override CROSS_BOOTSTRAP_JULIA=$(BUILDROOT)/../bootstrap/usr/bin/julia
-override CROSS_BOOTSTRAP_SYSBASE=$(BUILDROOT)/../bootstrap/usr/lib/julia/sysbase.$(SHLIB_EXT)
