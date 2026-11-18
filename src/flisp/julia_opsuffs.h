@@ -8,6 +8,8 @@
    end
 */
 
+#include <stdint.h>
+
 static const uint32_t opsuffs[] = {
    0x000000b2, // ²
    0x000000b3, // ³

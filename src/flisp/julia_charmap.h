@@ -4,6 +4,8 @@
 
    Important: when this table is updated, also update the corresponding table
               in base/strings/unicode.jl */
+#include <stdint.h>
+
 static const uint32_t charmap[][2] = {
     { 0x025B, 0x03B5 }, // latin small letter open e -> greek small letter epsilon
     { 0x00B5, 0x03BC }, // micro sign -> greek small letter mu
