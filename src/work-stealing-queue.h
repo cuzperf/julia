@@ -5,6 +5,7 @@
 
 #include <stdalign.h>
 
+#include "support/dtypes.h"
 #include "julia_atomics.h"
 #include "assert.h"
 
