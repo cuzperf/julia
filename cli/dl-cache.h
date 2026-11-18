@@ -16,7 +16,11 @@
    License along with the GNU C Library; if not, see
    <http://www.gnu.org/licenses/>.  */
 
+#ifndef JL_DL_CACHE_H
+#define JL_DL_CACHE_H
+
 #include <stdint.h>
+#include "../src/support/platform.h"
 
 #define FLAG_ANY                        -1
 #define FLAG_TYPE_MASK                  0x00ff
@@ -182,3 +186,5 @@ struct cache_file_new
  & (~(__alignof__ (struct cache_file_new) - 1)))
 
 // extern int _dl_cache_libcmp (const char *p1, const char *p2) attribute_hidden;
+
+#endif
